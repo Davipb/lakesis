@@ -28,17 +28,25 @@ Garbage collection is usually done when NEW is called and there isn't enough con
 
 
 ## ISA
+Opcodes are composed of two parts: The *instruction* and its *operands*.
 
 ### Instructions
+Instructions are encoded as a single byte.
+The two most significant bits of the byte indicate how many operands that instruction expects, from 0 `00` to 2 `10` -- the value 3 `11` is reserved and shouldn't be used.
+The remaining lower bits identify the instruction itself.
+
 First line contains the assembly mnemonic of the instruction,
-second line contains the opcode of the instruction,
+second line contains the value of the instruction in hexadecimal after masking out the top two bits,
 third line contains a description of the instruction.
-Unless otherwise stated, all values following the mnemonic or non-numeric bytes in the opcode are operands (view section below on all available operand addressing modes).
+All values following the mnemonic or non-numeric bytes in the opcode are operands (view section below on all available operands).
 
 #### Special
 * NOP  
 `00`  
 Does nothing
+* HALT  
+`3F`  
+Stops program execution
 
 #### Arithmetic
 * ADD src, dst  
@@ -134,8 +142,8 @@ Pushes `x` to the stack and decrements SP by 8. The memory location at the stack
 * POP x  
 `17 x`  
 Pops the item at the top of the stack to `x` and increments SP by 8. `x` inherits the data type of the popped item.
-* NEW dst, size  
-`18 dst size`  
+* NEW size, dst  
+`18 size dst`  
 Allocates a new memory region of size `size`, puts its address in `dst`, and marks `dst` as a reference.
 * GC  
 `19`  
@@ -149,27 +157,46 @@ Marks `x` as containing regular data. Use with extreme caution -- in general, th
 
 
 ### Operands
-* `00 nn nn nn nn nn nn nn nn`: Immediate
-    * `n` = Value in Little Endian
+Operands always start with a single byte whose bits follow the pattern:  
+`aarr snnn`  
+Where:
+* `a` = Addressing mode identifier
+* `r` = Register number
+* `s` = Sign of the operand value; 0 = positive, 1 = negative
+* `n` = Number of bytes used by the operand value 
+* The operand value `v` is encoded as little-endian in the `n` bytes that follow the operand, using the sign `s`.
+
+The available addressing modes are:
+* `00`  
+n / -n  
+Immediate
+    * When used as a source, the `v` is used directly
+    * Cannot be used as a destination
     * Assembly syntax example:  
     `PUSH 1234`
-* Rn  
-`01nn 0000`: Register
-    * `n` = Register index
+* `01`  
+Rn  
+Register  
+    * When used as a source, the value stored in register `r` is used
+    * When used as a destination, values are written to register `r`
     * Assembly syntax example:  
     `PUSH R0`
-* [Rn+x] / [Rn-x]  
-`10nn sxxx xxxx xxxx`: Reference
-    * `n` = Register Index
-    * `f` = Offset sign; 0 = positive, 1 = negative
-    * `x` = Offset value, MSB in first byte
+* `10`  
+[Rn+x] / [Rn-x]  
+Reference  
+    * Reads the value stored in register `r`, adds `v` to it, and interprets that as a memory address
+    * When used as a source, the value stored in the calculated memory address is used
+    * When used as a destination, values are written to the calculated memory address
     * Assembly syntax examples:  
     `PUSH [R0]`  
     `PUSH [R0+8]`  
     `PUSH [R0-8]`
-* [SP+x]  
-`1100 xxxx xxxx xxxx`: Stack reference
-    * `x` = Offset value, MSB in first byte
+* `11`  
+[SP+x]  
+Stack reference
+    * Adds `v` to the stack pointer, and interprets that as a memory address. Negative `v` values are not allowed.
+    * When used as a source, the value stored in the calculated memory address is used
+    * When used as a destination, values are written to the calculated memory address
     * Assembly syntax examples:  
     `PUSH [SP]`  
     `PUSH [SP+8]`
