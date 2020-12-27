@@ -281,6 +281,42 @@ impl Instruction {
             },
         }
     }
+
+    pub fn from_mnemonic(mnemonic: &str) -> Result<Instruction> {
+        // TODO: There's got to be a better way to do this
+        match mnemonic {
+            x if x == Self::NoOperation.descriptor().mnemonic => Ok(Self::NoOperation),
+            x if x == Self::Move.descriptor().mnemonic => Ok(Self::Move),
+            x if x == Self::Add.descriptor().mnemonic => Ok(Self::Add),
+            x if x == Self::Subtract.descriptor().mnemonic => Ok(Self::Subtract),
+            x if x == Self::Multiply.descriptor().mnemonic => Ok(Self::Multiply),
+            x if x == Self::Divide.descriptor().mnemonic => Ok(Self::Divide),
+            x if x == Self::BitwiseAnd.descriptor().mnemonic => Ok(Self::BitwiseAnd),
+            x if x == Self::BitwiseOr.descriptor().mnemonic => Ok(Self::BitwiseOr),
+            x if x == Self::BitwiseXor.descriptor().mnemonic => Ok(Self::BitwiseXor),
+            x if x == Self::BitwiseNot.descriptor().mnemonic => Ok(Self::BitwiseNot),
+            x if x == Self::ShiftLeft.descriptor().mnemonic => Ok(Self::ShiftLeft),
+            x if x == Self::ShiftRight.descriptor().mnemonic => Ok(Self::ShiftRight),
+            x if x == Self::Compare.descriptor().mnemonic => Ok(Self::Compare),
+            x if x == Self::Jump.descriptor().mnemonic => Ok(Self::Jump),
+            x if x == Self::JumpEqual.descriptor().mnemonic => Ok(Self::JumpEqual),
+            x if x == Self::JumpNotEqual.descriptor().mnemonic => Ok(Self::JumpNotEqual),
+            x if x == Self::JumpGreater.descriptor().mnemonic => Ok(Self::JumpGreater),
+            x if x == Self::JumpGreaterEqual.descriptor().mnemonic => Ok(Self::JumpGreaterEqual),
+            x if x == Self::JumpLess.descriptor().mnemonic => Ok(Self::JumpLess),
+            x if x == Self::JumpLessEqual.descriptor().mnemonic => Ok(Self::JumpLessEqual),
+            x if x == Self::Call.descriptor().mnemonic => Ok(Self::Call),
+            x if x == Self::Return.descriptor().mnemonic => Ok(Self::Return),
+            x if x == Self::Push.descriptor().mnemonic => Ok(Self::Push),
+            x if x == Self::Pop.descriptor().mnemonic => Ok(Self::Pop),
+            x if x == Self::New.descriptor().mnemonic => Ok(Self::New),
+            x if x == Self::GarbageCollector.descriptor().mnemonic => Ok(Self::GarbageCollector),
+            x if x == Self::Reference.descriptor().mnemonic => Ok(Self::Reference),
+            x if x == Self::Unreference.descriptor().mnemonic => Ok(Self::Unreference),
+            x if x == Self::Halt.descriptor().mnemonic => Ok(Self::Halt),
+            x => Err(Error::new(&format!("{:} is not a valid instruction", x))),
+        }
+    }
 }
 
 impl TryFrom<u8> for Instruction {

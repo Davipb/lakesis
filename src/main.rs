@@ -2,7 +2,9 @@ use crate::core::{Error, VoidResult};
 use std::env;
 use std::fs::File;
 use std::io::{Cursor, Read};
+use std::path::{self, Path};
 
+mod assembler;
 mod core;
 mod opcodes;
 
@@ -18,6 +20,7 @@ fn main() -> VoidResult {
 
     match verb {
         "view" => disassemble(args),
+        "asm" => assemble(args),
         _ => print_help(&raw_args),
     }
 }
@@ -27,6 +30,14 @@ fn print_help(args: &[String]) -> VoidResult {
 
     println!("{} help", program_name);
     println!("\tPrints this message");
+    println!();
+
+    println!("{} asm <source> [output]", program_name);
+    println!("\tCompiles an assembly source code file to an executable");
+    println!("\tsource: Path of the file containing the assembly source code");
+    println!("\toutput: Path of the file where the executable will be written to.");
+    println!("\t        If not specified, uses the same file as 'source' but with a");
+    println!("\t        .bin extension");
     println!();
 
     println!("{} view <file>", program_name);
@@ -54,5 +65,24 @@ fn disassemble(args: &[String]) -> VoidResult {
         println!("{:016X} {}", cursor.position(), opcode);
     }
 
+    Ok(())
+}
+
+fn assemble(args: &[String]) -> VoidResult {
+    if args.len() < 1 || args.len() > 2 {
+        return Err(Error::new("Expected 1 or 2 arguments"));
+    }
+
+    let source_path = Path::new(&args[0]);
+    let result_path = if args.len() >= 2 {
+        Path::new(&args[1]).to_owned()
+    } else {
+        source_path.with_extension("bin")
+    };
+
+    let mut source = File::open(source_path)?;
+    let mut result = File::create(result_path)?;
+
+    assembler::assemble(&mut source, &mut result)?;
     Ok(())
 }
