@@ -1,5 +1,5 @@
 use crate::core::{Error, IWord, RegisterIndex, Result, UWord};
-use std::convert::{TryFrom, TryInto};
+use std::collections::HashMap;
 use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::io::Read;
 use std::slice;
@@ -18,7 +18,7 @@ pub struct Opcode {
  * Certain instructions may require operands.
  */
 #[repr(u8)]
-#[derive(PartialEq, Eq, Copy, Clone)]
+#[derive(PartialEq, Eq, Hash, Copy, Clone, Debug)]
 pub enum Instruction {
     NoOperation = 0x00,
     Move,
@@ -52,6 +52,7 @@ pub enum Instruction {
 }
 
 /// Useful metadata about an instruction
+#[derive(PartialEq, Eq, Copy, Clone)]
 pub struct InstructionDescriptor {
     /// Operands this instruction expects
     pub operands: &'static [OperandMode],
@@ -82,11 +83,18 @@ pub enum Operand {
     Reference {
         /// Register that contains the memory reference
         register: RegisterIndex,
-        /// Hardcoded value added to the reference before deferencing it
+        /// Hardcoded value added to the reference before dereferencing it
         offset: IWord,
     },
     /// A stack value
     Stack(UWord),
+}
+
+/// Repository of instruction data and metadata
+struct InstructionRepository {
+    descriptors: HashMap<Instruction, InstructionDescriptor>,
+    by_value: HashMap<u8, Instruction>,
+    by_mnemonic: HashMap<&'static str, Instruction>,
 }
 
 /// Reads a single byte from a reader
@@ -157,211 +165,275 @@ impl Instruction {
     const MASK: u8 = 0b0011_111;
     const SHIFT: usize = 6;
 
-    pub fn decode(id: u8) -> Result<Instruction> {
-        id.try_into()
+    pub fn decode(value: u8) -> Result<Instruction> {
+        Self::from_value(value).ok_or(Error::new(&format!(
+            "There is no instruction with value {:2X}",
+            value
+        )))
+    }
+
+    pub fn from_mnemonic(mnemonic: &str) -> Option<Instruction> {
+        InstructionRepository::find_by_mnemonic(mnemonic)
+    }
+
+    pub fn from_value(value: u8) -> Option<Instruction> {
+        InstructionRepository::find_by_value(value)
     }
 
     pub fn descriptor(&self) -> InstructionDescriptor {
-        match *self {
-            Self::NoOperation => InstructionDescriptor {
-                mnemonic: "nop",
-                operands: &[],
-            },
-            Self::Halt => InstructionDescriptor {
-                mnemonic: "halt",
-                operands: &[],
-            },
-            Self::Add => InstructionDescriptor {
-                mnemonic: "add",
-                operands: &[OperandMode::ReadOnly, OperandMode::ReadWrite],
-            },
-            Self::Subtract => InstructionDescriptor {
-                mnemonic: "sub",
-                operands: &[OperandMode::ReadOnly, OperandMode::ReadWrite],
-            },
-            Self::Multiply => InstructionDescriptor {
-                mnemonic: "mul",
-                operands: &[OperandMode::ReadOnly, OperandMode::ReadWrite],
-            },
-            Self::Divide => InstructionDescriptor {
-                mnemonic: "div",
-                operands: &[OperandMode::ReadOnly, OperandMode::ReadWrite],
-            },
-            Self::BitwiseAnd => InstructionDescriptor {
-                mnemonic: "and",
-                operands: &[OperandMode::ReadOnly, OperandMode::ReadWrite],
-            },
-            Self::BitwiseOr => InstructionDescriptor {
-                mnemonic: "or",
-                operands: &[OperandMode::ReadOnly, OperandMode::ReadWrite],
-            },
-            Self::BitwiseXor => InstructionDescriptor {
-                mnemonic: "xor",
-                operands: &[OperandMode::ReadOnly, OperandMode::ReadWrite],
-            },
-            Self::BitwiseNot => InstructionDescriptor {
-                mnemonic: "not",
-                operands: &[OperandMode::ReadWrite],
-            },
-            Self::ShiftLeft => InstructionDescriptor {
-                mnemonic: "shl",
-                operands: &[OperandMode::ReadOnly, OperandMode::ReadWrite],
-            },
-            Self::ShiftRight => InstructionDescriptor {
-                mnemonic: "shr",
-                operands: &[OperandMode::ReadOnly, OperandMode::ReadWrite],
-            },
-            Self::Compare => InstructionDescriptor {
-                mnemonic: "cmp",
-                operands: &[OperandMode::ReadOnly, OperandMode::ReadWrite],
-            },
-            Self::Jump => InstructionDescriptor {
-                mnemonic: "jmp",
-                operands: &[OperandMode::ReadOnly],
-            },
-            Self::JumpEqual => InstructionDescriptor {
-                mnemonic: "jeq",
-                operands: &[OperandMode::ReadOnly],
-            },
-            Self::JumpNotEqual => InstructionDescriptor {
-                mnemonic: "jne",
-                operands: &[OperandMode::ReadOnly],
-            },
-            Self::JumpGreater => InstructionDescriptor {
-                mnemonic: "jgt",
-                operands: &[OperandMode::ReadOnly],
-            },
-            Self::JumpGreaterEqual => InstructionDescriptor {
-                mnemonic: "jge",
-                operands: &[OperandMode::ReadOnly],
-            },
-            Self::JumpLess => InstructionDescriptor {
-                mnemonic: "jlt",
-                operands: &[OperandMode::ReadOnly],
-            },
-            Self::JumpLessEqual => InstructionDescriptor {
-                mnemonic: "jle",
-                operands: &[OperandMode::ReadOnly],
-            },
-            Self::Call => InstructionDescriptor {
-                mnemonic: "call",
-                operands: &[OperandMode::ReadOnly],
-            },
-            Self::Return => InstructionDescriptor {
-                mnemonic: "ret",
-                operands: &[],
-            },
-            Self::Move => InstructionDescriptor {
-                mnemonic: "mov",
-                operands: &[OperandMode::ReadOnly, OperandMode::ReadWrite],
-            },
-            Self::Push => InstructionDescriptor {
-                mnemonic: "push",
-                operands: &[OperandMode::ReadOnly],
-            },
-            Self::Pop => InstructionDescriptor {
-                mnemonic: "pop",
-                operands: &[OperandMode::ReadWrite],
-            },
-            Self::New => InstructionDescriptor {
-                mnemonic: "new",
-                operands: &[OperandMode::ReadOnly, OperandMode::ReadWrite],
-            },
-            Self::GarbageCollector => InstructionDescriptor {
-                mnemonic: "gc",
-                operands: &[],
-            },
-            Self::Reference => InstructionDescriptor {
-                mnemonic: "ref",
-                operands: &[OperandMode::ReadWrite],
-            },
-            Self::Unreference => InstructionDescriptor {
-                mnemonic: "unref",
-                operands: &[OperandMode::ReadWrite],
-            },
-        }
-    }
-
-    pub fn from_mnemonic(mnemonic: &str) -> Result<Instruction> {
-        // TODO: There's got to be a better way to do this
-        match mnemonic {
-            x if x == Self::NoOperation.descriptor().mnemonic => Ok(Self::NoOperation),
-            x if x == Self::Move.descriptor().mnemonic => Ok(Self::Move),
-            x if x == Self::Add.descriptor().mnemonic => Ok(Self::Add),
-            x if x == Self::Subtract.descriptor().mnemonic => Ok(Self::Subtract),
-            x if x == Self::Multiply.descriptor().mnemonic => Ok(Self::Multiply),
-            x if x == Self::Divide.descriptor().mnemonic => Ok(Self::Divide),
-            x if x == Self::BitwiseAnd.descriptor().mnemonic => Ok(Self::BitwiseAnd),
-            x if x == Self::BitwiseOr.descriptor().mnemonic => Ok(Self::BitwiseOr),
-            x if x == Self::BitwiseXor.descriptor().mnemonic => Ok(Self::BitwiseXor),
-            x if x == Self::BitwiseNot.descriptor().mnemonic => Ok(Self::BitwiseNot),
-            x if x == Self::ShiftLeft.descriptor().mnemonic => Ok(Self::ShiftLeft),
-            x if x == Self::ShiftRight.descriptor().mnemonic => Ok(Self::ShiftRight),
-            x if x == Self::Compare.descriptor().mnemonic => Ok(Self::Compare),
-            x if x == Self::Jump.descriptor().mnemonic => Ok(Self::Jump),
-            x if x == Self::JumpEqual.descriptor().mnemonic => Ok(Self::JumpEqual),
-            x if x == Self::JumpNotEqual.descriptor().mnemonic => Ok(Self::JumpNotEqual),
-            x if x == Self::JumpGreater.descriptor().mnemonic => Ok(Self::JumpGreater),
-            x if x == Self::JumpGreaterEqual.descriptor().mnemonic => Ok(Self::JumpGreaterEqual),
-            x if x == Self::JumpLess.descriptor().mnemonic => Ok(Self::JumpLess),
-            x if x == Self::JumpLessEqual.descriptor().mnemonic => Ok(Self::JumpLessEqual),
-            x if x == Self::Call.descriptor().mnemonic => Ok(Self::Call),
-            x if x == Self::Return.descriptor().mnemonic => Ok(Self::Return),
-            x if x == Self::Push.descriptor().mnemonic => Ok(Self::Push),
-            x if x == Self::Pop.descriptor().mnemonic => Ok(Self::Pop),
-            x if x == Self::New.descriptor().mnemonic => Ok(Self::New),
-            x if x == Self::GarbageCollector.descriptor().mnemonic => Ok(Self::GarbageCollector),
-            x if x == Self::Reference.descriptor().mnemonic => Ok(Self::Reference),
-            x if x == Self::Unreference.descriptor().mnemonic => Ok(Self::Unreference),
-            x if x == Self::Halt.descriptor().mnemonic => Ok(Self::Halt),
-            x => Err(Error::new(&format!("{:} is not a valid instruction", x))),
-        }
-    }
-}
-
-impl TryFrom<u8> for Instruction {
-    type Error = Error;
-
-    fn try_from(byte: u8) -> Result<Self> {
-        // TODO: There's got to be a better way to do this
-        match byte {
-            x if x == Self::NoOperation as u8 => Ok(Self::NoOperation),
-            x if x == Self::Move as u8 => Ok(Self::Move),
-            x if x == Self::Add as u8 => Ok(Self::Add),
-            x if x == Self::Subtract as u8 => Ok(Self::Subtract),
-            x if x == Self::Multiply as u8 => Ok(Self::Multiply),
-            x if x == Self::Divide as u8 => Ok(Self::Divide),
-            x if x == Self::BitwiseAnd as u8 => Ok(Self::BitwiseAnd),
-            x if x == Self::BitwiseOr as u8 => Ok(Self::BitwiseOr),
-            x if x == Self::BitwiseXor as u8 => Ok(Self::BitwiseXor),
-            x if x == Self::BitwiseNot as u8 => Ok(Self::BitwiseNot),
-            x if x == Self::ShiftLeft as u8 => Ok(Self::ShiftLeft),
-            x if x == Self::ShiftRight as u8 => Ok(Self::ShiftRight),
-            x if x == Self::Compare as u8 => Ok(Self::Compare),
-            x if x == Self::Jump as u8 => Ok(Self::Jump),
-            x if x == Self::JumpEqual as u8 => Ok(Self::JumpEqual),
-            x if x == Self::JumpNotEqual as u8 => Ok(Self::JumpNotEqual),
-            x if x == Self::JumpGreater as u8 => Ok(Self::JumpGreater),
-            x if x == Self::JumpGreaterEqual as u8 => Ok(Self::JumpGreaterEqual),
-            x if x == Self::JumpLess as u8 => Ok(Self::JumpLess),
-            x if x == Self::JumpLessEqual as u8 => Ok(Self::JumpLessEqual),
-            x if x == Self::Call as u8 => Ok(Self::Call),
-            x if x == Self::Return as u8 => Ok(Self::Return),
-            x if x == Self::Push as u8 => Ok(Self::Push),
-            x if x == Self::Pop as u8 => Ok(Self::Pop),
-            x if x == Self::New as u8 => Ok(Self::New),
-            x if x == Self::GarbageCollector as u8 => Ok(Self::GarbageCollector),
-            x if x == Self::Reference as u8 => Ok(Self::Reference),
-            x if x == Self::Unreference as u8 => Ok(Self::Unreference),
-            x if x == Self::Halt as u8 => Ok(Self::Halt),
-            x => Err(Error::new(&format!("{:2x} is not a valid instruction", x))),
-        }
+        InstructionRepository::get_descriptor(self)
     }
 }
 
 impl Display for Instruction {
     fn fmt(&self, fmt: &mut Formatter<'_>) -> FmtResult {
         write!(fmt, "{}", self.descriptor().mnemonic)
+    }
+}
+
+thread_local!(static INSTRUCTION_REPOSITORY: InstructionRepository = InstructionRepository::new());
+
+impl InstructionRepository {
+
+    fn get_descriptor(instr: &Instruction) -> InstructionDescriptor {
+        INSTRUCTION_REPOSITORY.with(|r| 
+            // All instructions must have a descriptor
+            r.descriptors.get(instr).map(Clone::clone).unwrap()
+        )
+    }
+
+    fn find_by_mnemonic(mnemonic: &str) -> Option<Instruction> {
+        INSTRUCTION_REPOSITORY.with(|r| {
+            let mnemonic = mnemonic.to_lowercase();
+            r.by_mnemonic.get(&mnemonic[..]).map(Clone::clone)
+        })
+    }
+
+    fn find_by_value(value: u8) -> Option<Instruction> {
+        INSTRUCTION_REPOSITORY.with(|r|
+            r.by_value.get(&value).map(Clone::clone)
+        )
+    }
+
+    fn new() -> InstructionRepository {
+        let mut descriptors = HashMap::new();
+        descriptors.insert(
+            Instruction::NoOperation,
+            InstructionDescriptor {
+                mnemonic: "nop",
+                operands: &[],
+            },
+        );
+        descriptors.insert(
+            Instruction::Halt,
+            InstructionDescriptor {
+                mnemonic: "halt",
+                operands: &[],
+            },
+        );
+        descriptors.insert(
+            Instruction::Add,
+            InstructionDescriptor {
+                mnemonic: "add",
+                operands: &[OperandMode::ReadOnly, OperandMode::ReadWrite],
+            },
+        );
+        descriptors.insert(
+            Instruction::Subtract,
+            InstructionDescriptor {
+                mnemonic: "sub",
+                operands: &[OperandMode::ReadOnly, OperandMode::ReadWrite],
+            },
+        );
+        descriptors.insert(
+            Instruction::Multiply,
+            InstructionDescriptor {
+                mnemonic: "mul",
+                operands: &[OperandMode::ReadOnly, OperandMode::ReadWrite],
+            },
+        );
+        descriptors.insert(
+            Instruction::Divide,
+            InstructionDescriptor {
+                mnemonic: "div",
+                operands: &[OperandMode::ReadOnly, OperandMode::ReadWrite],
+            },
+        );
+        descriptors.insert(
+            Instruction::BitwiseAnd,
+            InstructionDescriptor {
+                mnemonic: "and",
+                operands: &[OperandMode::ReadOnly, OperandMode::ReadWrite],
+            },
+        );
+        descriptors.insert(
+            Instruction::BitwiseOr,
+            InstructionDescriptor {
+                mnemonic: "or",
+                operands: &[OperandMode::ReadOnly, OperandMode::ReadWrite],
+            },
+        );
+        descriptors.insert(
+            Instruction::BitwiseXor,
+            InstructionDescriptor {
+                mnemonic: "xor",
+                operands: &[OperandMode::ReadOnly, OperandMode::ReadWrite],
+            },
+        );
+        descriptors.insert(
+            Instruction::BitwiseNot,
+            InstructionDescriptor {
+                mnemonic: "not",
+                operands: &[OperandMode::ReadWrite],
+            },
+        );
+        descriptors.insert(
+            Instruction::ShiftLeft,
+            InstructionDescriptor {
+                mnemonic: "shl",
+                operands: &[OperandMode::ReadOnly, OperandMode::ReadWrite],
+            },
+        );
+        descriptors.insert(
+            Instruction::ShiftRight,
+            InstructionDescriptor {
+                mnemonic: "shr",
+                operands: &[OperandMode::ReadOnly, OperandMode::ReadWrite],
+            },
+        );
+        descriptors.insert(
+            Instruction::Compare,
+            InstructionDescriptor {
+                mnemonic: "cmp",
+                operands: &[OperandMode::ReadOnly, OperandMode::ReadOnly],
+            },
+        );
+        descriptors.insert(
+            Instruction::Jump,
+            InstructionDescriptor {
+                mnemonic: "jmp",
+                operands: &[OperandMode::ReadOnly],
+            },
+        );
+        descriptors.insert(
+            Instruction::JumpEqual,
+            InstructionDescriptor {
+                mnemonic: "jeq",
+                operands: &[OperandMode::ReadOnly],
+            },
+        );
+        descriptors.insert(
+            Instruction::JumpNotEqual,
+            InstructionDescriptor {
+                mnemonic: "jne",
+                operands: &[OperandMode::ReadOnly],
+            },
+        );
+        descriptors.insert(
+            Instruction::JumpGreater,
+            InstructionDescriptor {
+                mnemonic: "jgt",
+                operands: &[OperandMode::ReadOnly],
+            },
+        );
+        descriptors.insert(
+            Instruction::JumpGreaterEqual,
+            InstructionDescriptor {
+                mnemonic: "jge",
+                operands: &[OperandMode::ReadOnly],
+            },
+        );
+        descriptors.insert(
+            Instruction::JumpLess,
+            InstructionDescriptor {
+                mnemonic: "jlt",
+                operands: &[OperandMode::ReadOnly],
+            },
+        );
+        descriptors.insert(
+            Instruction::JumpLessEqual,
+            InstructionDescriptor {
+                mnemonic: "jle",
+                operands: &[OperandMode::ReadOnly],
+            },
+        );
+        descriptors.insert(
+            Instruction::Call,
+            InstructionDescriptor {
+                mnemonic: "call",
+                operands: &[OperandMode::ReadOnly],
+            },
+        );
+        descriptors.insert(
+            Instruction::Return,
+            InstructionDescriptor {
+                mnemonic: "ret",
+                operands: &[],
+            },
+        );
+        descriptors.insert(
+            Instruction::Move,
+            InstructionDescriptor {
+                mnemonic: "mov",
+                operands: &[OperandMode::ReadOnly, OperandMode::ReadWrite],
+            },
+        );
+        descriptors.insert(
+            Instruction::Push,
+            InstructionDescriptor {
+                mnemonic: "push",
+                operands: &[OperandMode::ReadOnly],
+            },
+        );
+        descriptors.insert(
+            Instruction::Pop,
+            InstructionDescriptor {
+                mnemonic: "pop",
+                operands: &[OperandMode::ReadWrite],
+            },
+        );
+        descriptors.insert(
+            Instruction::New,
+            InstructionDescriptor {
+                mnemonic: "new",
+                operands: &[OperandMode::ReadOnly, OperandMode::ReadWrite],
+            },
+        );
+        descriptors.insert(
+            Instruction::GarbageCollector,
+            InstructionDescriptor {
+                mnemonic: "gc",
+                operands: &[],
+            },
+        );
+        descriptors.insert(
+            Instruction::Reference,
+            InstructionDescriptor {
+                mnemonic: "ref",
+                operands: &[OperandMode::ReadWrite],
+            },
+        );
+        descriptors.insert(
+            Instruction::Unreference,
+            InstructionDescriptor {
+                mnemonic: "unref",
+                operands: &[OperandMode::ReadWrite],
+            },
+        );
+
+        let mut by_mnemonic = HashMap::new();
+        let mut by_value = HashMap::new();
+
+        for (instr, descr) in descriptors.iter() {
+            by_mnemonic.insert(descr.mnemonic, instr.clone());
+            by_value.insert(*instr as u8, instr.clone());
+        }
+
+        InstructionRepository {
+            descriptors,
+            by_mnemonic,
+            by_value,
+        }
     }
 }
 

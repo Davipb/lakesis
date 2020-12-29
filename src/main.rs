@@ -2,7 +2,7 @@ use crate::core::{Error, VoidResult};
 use std::env;
 use std::fs::File;
 use std::io::{Cursor, Read};
-use std::path::{self, Path};
+use std::path::Path;
 
 mod assembler;
 mod core;

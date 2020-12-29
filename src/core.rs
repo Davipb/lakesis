@@ -14,10 +14,6 @@ pub type Result<T> = result::Result<T, Error>;
 pub type VoidResult = Result<()>;
 
 impl Error {
-    pub fn empty() -> Error {
-        Error { message: None }
-    }
-
     pub fn new(msg: &str) -> Error {
         Error {
             message: Some(msg.to_owned()),

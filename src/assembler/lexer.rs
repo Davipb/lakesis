@@ -1,12 +1,14 @@
 use super::{Error, FilePosition, FileRange, Result, VoidResult};
-use crate::core::{Error as CoreError, RegisterIndex};
+use crate::core::RegisterIndex;
+use crate::opcodes::Instruction;
 use std::fmt::{Debug, Display, Formatter, Result as FmtResult};
 use std::io::Read;
 
-#[derive(Debug, Clone)]
+#[derive(PartialEq, Eq, Debug, Clone)]
 pub enum TokenValue {
-    Label(String),
-    Identifier(String),
+    LabelDefinition(String),
+    LabelReference(String),
+    Instruction(Instruction),
     Number(i64),
     Register(RegisterIndex),
     StackPointer,
@@ -17,7 +19,7 @@ pub enum TokenValue {
     OffsetNegative,
 }
 
-#[derive(Debug, Clone)]
+#[derive(PartialEq, Eq, Debug, Clone)]
 pub struct Token {
     pub value: TokenValue,
     pub range: FileRange,
@@ -183,7 +185,7 @@ impl Lexer {
         }
     }
 
-    fn lex(&mut self) -> Result<Vec<Token>> {
+    fn lex(mut self) -> Result<Vec<Token>> {
         if !self.tokens.is_empty() {
             return Err(Error::from_message(
                 "Lexer cannot be reused after lex() is called",
@@ -195,7 +197,7 @@ impl Lexer {
             self.lex_single()?;
         }
 
-        Ok(self.tokens.clone())
+        Ok(self.tokens)
     }
 
     fn lex_single(&mut self) -> VoidResult {
@@ -319,11 +321,11 @@ impl Lexer {
 
         if name.ends_with(':') {
             let label_name = name.trim_end_matches(':').to_owned();
-            self.make_token(TokenValue::Label(label_name));
+            self.make_token(TokenValue::LabelDefinition(label_name));
             return Ok(());
         }
 
-        if self.lex_register(&name)? {
+        if self.lex_register(&name)? || self.lex_instruction(&name) {
             return Ok(());
         }
 
@@ -332,7 +334,7 @@ impl Lexer {
             return Ok(());
         }
 
-        self.make_token(TokenValue::Identifier(name));
+        self.make_token(TokenValue::LabelReference(name));
         Ok(())
     }
 
@@ -362,6 +364,16 @@ impl Lexer {
         Ok(true)
     }
 
+    fn lex_instruction(&mut self, identifier: &str) -> bool {
+        let instruction = match Instruction::from_mnemonic(identifier) {
+            None => return false,
+            Some(x) => x,
+        };
+
+        self.make_token(TokenValue::Instruction(instruction));
+        true
+    }
+
     fn is_valid_identifier_start(c: char) -> bool {
         c == '_' || c.is_alphabetic()
     }
@@ -373,6 +385,5 @@ impl Lexer {
 
 pub fn lex(read: &mut impl Read) -> Result<Vec<Token>> {
     let reader = TrackingFileReader::from_reader(read)?;
-    let mut lexer = Lexer::new(reader);
-    lexer.lex()
+    Lexer::new(reader).lex()
 }

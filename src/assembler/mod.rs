@@ -3,6 +3,7 @@ use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::io::{Error as IoError, Read, Seek, Write};
 
 mod lexer;
+mod parser;
 
 #[derive(Debug)]
 pub struct Error {
@@ -108,8 +109,9 @@ impl Display for FileRange {
 }
 
 pub fn assemble(source: &mut impl Read, result: &mut (impl Write + Seek)) -> VoidResult {
-    for token in lexer::lex(source)? {
-        println!("{}", token)
+    let tokens = lexer::lex(source)?;
+    for opcode in parser::parse(&tokens)? {
+        println!("{}", opcode)
     }
 
     Ok(())
