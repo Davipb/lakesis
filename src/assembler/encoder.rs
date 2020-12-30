@@ -1,7 +1,227 @@
-use std::io::{Write, Seek};
-use super::parser::{Token, TokenValue, Operand};
-use super::{Error, Result, VoidResult}
+use super::parser::{Operand, Token, TokenValue};
+use super::{Error, FilePosition, FileRange, Result, VoidResult};
+use crate::core::{IWord, UWord};
+use crate::opcodes::{Instruction, Operand as CoreOperand};
+use std::collections::HashMap;
+use std::io::{Seek, SeekFrom, Write};
+use std::slice;
 
-pub fn encode(tokens: &[Token], write: &mut (impl Write + Seek)) -> VoidResult {
+struct Encoder<'a, T>
+where
+    T: Write + Seek,
+{
+    tokens: &'a [Token],
+    output: &'a mut T,
+    index: usize,
+    label_offsets: HashMap<String, u64>,
+    fixups: HashMap<u64, String>,
+}
 
+struct OperandData<'a> {
+    addressing_mode: u8,
+    register_number: u8,
+    value_is_positive: bool,
+    value_absolute: UWord,
+    label: Option<&'a str>,
+}
+
+impl<T> Encoder<'_, T>
+where
+    T: Write + Seek,
+{
+    fn new<'a>(tokens: &'a [Token], output: &'a mut T) -> Encoder<'a, T> {
+        Encoder {
+            tokens,
+            output,
+            index: 0,
+            label_offsets: HashMap::new(),
+            fixups: HashMap::new(),
+        }
+    }
+
+    fn offset(&mut self) -> Result<u64> {
+        Ok(self.output.seek(SeekFrom::Current(0))?)
+    }
+
+    fn is_eof(&self) -> bool {
+        self.index >= self.tokens.len()
+    }
+
+    fn peek(&self) -> &TokenValue {
+        &self.peek_full().value
+    }
+
+    fn peek_full(&self) -> &Token {
+        &self.tokens[self.index]
+    }
+
+    fn range(&self) -> FileRange {
+        if self.is_eof() {
+            self.tokens[self.tokens.len() - 1].range
+        } else {
+            self.peek_full().range
+        }
+    }
+
+    fn make_error(&self, msg: &str) -> Error {
+        Error {
+            message: msg.to_owned(),
+            range: self.range(),
+        }
+    }
+
+    fn consume(&mut self) -> bool {
+        if self.is_eof() {
+            return false;
+        }
+
+        self.index += 1;
+        !self.is_eof()
+    }
+
+    fn write_byte(&mut self, byte: u8) -> VoidResult {
+        Ok(self.output.write_all(slice::from_ref(&byte))?)
+    }
+
+    fn encode(mut self) -> VoidResult {
+        while !self.is_eof() {
+            self.encode_single()?;
+        }
+
+        self.fixup()?;
+        Ok(())
+    }
+
+    fn encode_single(&mut self) -> VoidResult {
+        match self.peek().clone() {
+            TokenValue::Label(s) => self.remember_label(&s)?,
+            TokenValue::Opcode {
+                instruction,
+                operands,
+            } => self.encode_opcode(instruction, &operands)?,
+        }
+
+        self.consume();
+        Ok(())
+    }
+
+    fn remember_label(&mut self, name: &str) -> VoidResult {
+        let offset = self.offset()?;
+        match self.label_offsets.insert(name.to_owned(), offset) {
+            None => Ok(()),
+            Some(x) => Err(self.make_error(&format!("Redefinition of label {}", x))),
+        }
+    }
+
+    fn encode_opcode(&mut self, instr: Instruction, operands: &[Operand]) -> VoidResult {
+        let mut value = instr as u8 & Instruction::MASK;
+        value |= ((operands.len() as u8) << Instruction::SHIFT) & !Instruction::MASK;
+
+        self.write_byte(value)?;
+        for operand in operands {
+            self.encode_operand(operand)?;
+        }
+
+        Ok(())
+    }
+
+    fn encode_operand(&mut self, operand: &Operand) -> VoidResult {
+        let data = Self::get_operand_data(operand);
+        let mut first_byte = 0;
+
+        first_byte |= (data.addressing_mode << CoreOperand::ADDRESSING_MODE_SHIFT)
+            & CoreOperand::ADDRESSING_MODE_MASK;
+
+        first_byte |= (data.register_number << CoreOperand::REGISTER_NUM_SHIFT)
+            & CoreOperand::REGISTER_NUM_MASK;
+
+        if !data.value_is_positive {
+            first_byte |= CoreOperand::SIGN_MASK;
+        }
+
+        let mut value_bytes: Vec<u8> = data.value_absolute.to_le_bytes().iter().cloned().collect();
+        if data.label.is_some() {
+            value_bytes.pop();
+        } else {
+            while value_bytes.ends_with(&[0]) {
+                value_bytes.pop();
+            }
+        }
+
+        if value_bytes.len() > 7 {
+            return Err(self.make_error("Operand value cannot be longer than 7 bytes"));
+        }
+
+        first_byte |= ((value_bytes.len() as u8) << CoreOperand::VALUE_SIZE_SHIFT)
+            & CoreOperand::VALUE_SIZE_MASK;
+
+        self.write_byte(first_byte)?;
+
+        let offset = self.offset()?;
+        if let Some(label) = data.label {
+            self.fixups.insert(offset, label.to_owned());
+        }
+
+        self.output.write_all(&value_bytes)?;
+        Ok(())
+    }
+
+    fn get_operand_data(operand: &Operand) -> OperandData {
+        match operand {
+            Operand::Label(l) => OperandData {
+                addressing_mode: 0,
+                register_number: 0,
+                value_is_positive: true,
+                value_absolute: 0,
+                label: Some(l),
+            },
+            Operand::Immediate(x) => OperandData {
+                addressing_mode: 0,
+                register_number: 0,
+                value_is_positive: *x >= 0,
+                value_absolute: x.abs() as UWord,
+                label: None,
+            },
+            Operand::Register(r) => OperandData {
+                addressing_mode: 1,
+                register_number: *r,
+                value_is_positive: true,
+                value_absolute: 0,
+                label: None,
+            },
+            Operand::Reference { register, offset } => OperandData {
+                addressing_mode: 2,
+                register_number: *register,
+                value_is_positive: *offset >= 0,
+                value_absolute: offset.abs() as UWord,
+                label: None,
+            },
+            Operand::Stack(o) => OperandData {
+                addressing_mode: 3,
+                register_number: 0,
+                value_is_positive: true,
+                value_absolute: *o,
+                label: None,
+            },
+        }
+    }
+
+    fn fixup(&mut self) -> VoidResult {
+        for (offset, label) in &self.fixups {
+            let label_value = match self.label_offsets.get(label) {
+                Some(x) => *x,
+                None => return Err(Error::from_message(&format!("Label {} not found", label))),
+            };
+
+            self.output.seek(SeekFrom::Start(*offset))?;
+            let bytes = label_value.to_le_bytes();
+            self.output.write_all(&bytes[0..7])?;
+        }
+
+        Ok(())
+    }
+}
+
+pub fn encode(tokens: &[Token], output: &mut (impl Write + Seek)) -> VoidResult {
+    Encoder::new(tokens, output).encode()
 }

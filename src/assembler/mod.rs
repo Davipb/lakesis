@@ -2,6 +2,7 @@ use crate::core::Error as CoreError;
 use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::io::{Error as IoError, Read, Seek, Write};
 
+mod encoder;
 mod lexer;
 mod parser;
 
@@ -109,10 +110,8 @@ impl Display for FileRange {
 }
 
 pub fn assemble(source: &mut impl Read, result: &mut (impl Write + Seek)) -> VoidResult {
-    let tokens = lexer::lex(source)?;
-    for opcode in parser::parse(&tokens)? {
-        println!("{}", opcode)
-    }
-
+    let lex_tokens = lexer::lex(source)?;
+    let parse_tokens = parser::parse(&lex_tokens)?;
+    encoder::encode(&parse_tokens, result)?;
     Ok(())
 }

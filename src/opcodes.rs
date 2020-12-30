@@ -162,8 +162,8 @@ impl Display for Opcode {
 }
 
 impl Instruction {
-    const MASK: u8 = 0b0011_111;
-    const SHIFT: usize = 6;
+    pub const MASK: u8 = 0b0011_111;
+    pub const SHIFT: usize = 6;
 
     pub fn decode(value: u8) -> Result<Instruction> {
         Self::from_value(value).ok_or(Error::new(&format!(
@@ -465,17 +465,17 @@ impl Display for OperandMode {
 }
 
 impl Operand {
-    const ADDRESSING_MODE_MASK: u8 = 0b1100_0000;
-    const ADDRESSING_MODE_SHIFT: usize = 6;
+    pub const ADDRESSING_MODE_MASK: u8 = 0b1100_0000;
+    pub const ADDRESSING_MODE_SHIFT: usize = 6;
 
-    const REGISTER_NUM_MASK: u8 = 0b0011_0000;
-    const REGISTER_NUM_SHIFT: usize = 4;
+    pub const REGISTER_NUM_MASK: u8 = 0b0011_0000;
+    pub const REGISTER_NUM_SHIFT: usize = 4;
 
-    const SIGN_MASK: u8 = 0b0000_1000;
-    const SIGN_SHIFT: usize = 3;
+    pub const SIGN_MASK: u8 = 0b0000_1000;
+    pub const SIGN_SHIFT: usize = 3;
 
-    const VALUE_SIZE_MASK: u8 = 0b0000_0111;
-    const VALUE_SIZE_SHIFT: usize = 0;
+    pub const VALUE_SIZE_MASK: u8 = 0b0000_0111;
+    pub const VALUE_SIZE_SHIFT: usize = 0;
 
     fn decode(read: &mut impl Read) -> Result<Operand> {
         let first_byte = read_byte(read)?;
