@@ -1,6 +1,6 @@
 use crate::core::{Error, IWord, RegisterIndex, Result, UWord};
 use std::collections::HashMap;
-use std::fmt::{Display, Formatter, Result as FmtResult};
+use std::fmt::{LowerHex, UpperHex, Display, Formatter, Result as FmtResult};
 use std::io::Read;
 use std::slice;
 
@@ -58,6 +58,8 @@ pub struct InstructionDescriptor {
     pub operands: &'static [OperandMode],
     /// Mnemonic used to represent this instruction for the user
     pub mnemonic: &'static str,
+    /// If this instruction causes a jump
+    pub is_jump: bool,
 }
 
 /// Mode of use of an operand
@@ -150,8 +152,15 @@ impl Display for Opcode {
     fn fmt(&self, fmt: &mut Formatter<'_>) -> FmtResult {
         write!(fmt, "{}", self.instruction)?;
 
+        let is_jump = self.instruction.descriptor().is_jump;
         for i in 0..self.operands.len() {
-            write!(fmt, " {}", self.operands[i])?;
+
+            if is_jump {
+                write!(fmt, " {:X}", self.operands[i])?;
+            } else {
+                write!(fmt, " {}", self.operands[i])?;
+            }
+
             if i < self.operands.len() - 1 {
                 write!(fmt, ",")?;
             }
@@ -222,6 +231,7 @@ impl InstructionRepository {
             InstructionDescriptor {
                 mnemonic: "nop",
                 operands: &[],
+                is_jump: false,
             },
         );
         descriptors.insert(
@@ -229,6 +239,7 @@ impl InstructionRepository {
             InstructionDescriptor {
                 mnemonic: "halt",
                 operands: &[],
+                is_jump: false,
             },
         );
         descriptors.insert(
@@ -236,6 +247,7 @@ impl InstructionRepository {
             InstructionDescriptor {
                 mnemonic: "add",
                 operands: &[OperandMode::ReadOnly, OperandMode::ReadWrite],
+                is_jump: false,
             },
         );
         descriptors.insert(
@@ -243,6 +255,7 @@ impl InstructionRepository {
             InstructionDescriptor {
                 mnemonic: "sub",
                 operands: &[OperandMode::ReadOnly, OperandMode::ReadWrite],
+                is_jump: false,
             },
         );
         descriptors.insert(
@@ -250,6 +263,7 @@ impl InstructionRepository {
             InstructionDescriptor {
                 mnemonic: "mul",
                 operands: &[OperandMode::ReadOnly, OperandMode::ReadWrite],
+                is_jump: false,
             },
         );
         descriptors.insert(
@@ -257,6 +271,7 @@ impl InstructionRepository {
             InstructionDescriptor {
                 mnemonic: "div",
                 operands: &[OperandMode::ReadOnly, OperandMode::ReadWrite],
+                is_jump: false,
             },
         );
         descriptors.insert(
@@ -264,6 +279,7 @@ impl InstructionRepository {
             InstructionDescriptor {
                 mnemonic: "and",
                 operands: &[OperandMode::ReadOnly, OperandMode::ReadWrite],
+                is_jump: false,
             },
         );
         descriptors.insert(
@@ -271,6 +287,7 @@ impl InstructionRepository {
             InstructionDescriptor {
                 mnemonic: "or",
                 operands: &[OperandMode::ReadOnly, OperandMode::ReadWrite],
+                is_jump: false,
             },
         );
         descriptors.insert(
@@ -278,6 +295,7 @@ impl InstructionRepository {
             InstructionDescriptor {
                 mnemonic: "xor",
                 operands: &[OperandMode::ReadOnly, OperandMode::ReadWrite],
+                is_jump: false,
             },
         );
         descriptors.insert(
@@ -285,6 +303,7 @@ impl InstructionRepository {
             InstructionDescriptor {
                 mnemonic: "not",
                 operands: &[OperandMode::ReadWrite],
+                is_jump: false,
             },
         );
         descriptors.insert(
@@ -292,6 +311,7 @@ impl InstructionRepository {
             InstructionDescriptor {
                 mnemonic: "shl",
                 operands: &[OperandMode::ReadOnly, OperandMode::ReadWrite],
+                is_jump: false,
             },
         );
         descriptors.insert(
@@ -299,6 +319,7 @@ impl InstructionRepository {
             InstructionDescriptor {
                 mnemonic: "shr",
                 operands: &[OperandMode::ReadOnly, OperandMode::ReadWrite],
+                is_jump: false,
             },
         );
         descriptors.insert(
@@ -306,6 +327,7 @@ impl InstructionRepository {
             InstructionDescriptor {
                 mnemonic: "cmp",
                 operands: &[OperandMode::ReadOnly, OperandMode::ReadOnly],
+                is_jump: false,
             },
         );
         descriptors.insert(
@@ -313,6 +335,7 @@ impl InstructionRepository {
             InstructionDescriptor {
                 mnemonic: "jmp",
                 operands: &[OperandMode::ReadOnly],
+                is_jump: true,
             },
         );
         descriptors.insert(
@@ -320,6 +343,7 @@ impl InstructionRepository {
             InstructionDescriptor {
                 mnemonic: "jeq",
                 operands: &[OperandMode::ReadOnly],
+                is_jump: true,
             },
         );
         descriptors.insert(
@@ -327,6 +351,7 @@ impl InstructionRepository {
             InstructionDescriptor {
                 mnemonic: "jne",
                 operands: &[OperandMode::ReadOnly],
+                is_jump: true,
             },
         );
         descriptors.insert(
@@ -334,6 +359,7 @@ impl InstructionRepository {
             InstructionDescriptor {
                 mnemonic: "jgt",
                 operands: &[OperandMode::ReadOnly],
+                is_jump: true,
             },
         );
         descriptors.insert(
@@ -341,6 +367,7 @@ impl InstructionRepository {
             InstructionDescriptor {
                 mnemonic: "jge",
                 operands: &[OperandMode::ReadOnly],
+                is_jump: true,
             },
         );
         descriptors.insert(
@@ -348,6 +375,7 @@ impl InstructionRepository {
             InstructionDescriptor {
                 mnemonic: "jlt",
                 operands: &[OperandMode::ReadOnly],
+                is_jump: true,
             },
         );
         descriptors.insert(
@@ -355,6 +383,7 @@ impl InstructionRepository {
             InstructionDescriptor {
                 mnemonic: "jle",
                 operands: &[OperandMode::ReadOnly],
+                is_jump: true,
             },
         );
         descriptors.insert(
@@ -362,6 +391,7 @@ impl InstructionRepository {
             InstructionDescriptor {
                 mnemonic: "call",
                 operands: &[OperandMode::ReadOnly],
+                is_jump: true,
             },
         );
         descriptors.insert(
@@ -369,6 +399,7 @@ impl InstructionRepository {
             InstructionDescriptor {
                 mnemonic: "ret",
                 operands: &[],
+                is_jump: true,
             },
         );
         descriptors.insert(
@@ -376,6 +407,7 @@ impl InstructionRepository {
             InstructionDescriptor {
                 mnemonic: "mov",
                 operands: &[OperandMode::ReadOnly, OperandMode::ReadWrite],
+                is_jump: false,
             },
         );
         descriptors.insert(
@@ -383,6 +415,7 @@ impl InstructionRepository {
             InstructionDescriptor {
                 mnemonic: "push",
                 operands: &[OperandMode::ReadOnly],
+                is_jump: false,
             },
         );
         descriptors.insert(
@@ -390,6 +423,7 @@ impl InstructionRepository {
             InstructionDescriptor {
                 mnemonic: "pop",
                 operands: &[OperandMode::ReadWrite],
+                is_jump: false,
             },
         );
         descriptors.insert(
@@ -397,6 +431,7 @@ impl InstructionRepository {
             InstructionDescriptor {
                 mnemonic: "new",
                 operands: &[OperandMode::ReadOnly, OperandMode::ReadWrite],
+                is_jump: false,
             },
         );
         descriptors.insert(
@@ -404,6 +439,7 @@ impl InstructionRepository {
             InstructionDescriptor {
                 mnemonic: "gc",
                 operands: &[],
+                is_jump: false,
             },
         );
         descriptors.insert(
@@ -411,6 +447,7 @@ impl InstructionRepository {
             InstructionDescriptor {
                 mnemonic: "ref",
                 operands: &[OperandMode::ReadWrite],
+                is_jump: false,
             },
         );
         descriptors.insert(
@@ -418,6 +455,7 @@ impl InstructionRepository {
             InstructionDescriptor {
                 mnemonic: "unref",
                 operands: &[OperandMode::ReadWrite],
+                is_jump: false,
             },
         );
 
@@ -523,6 +561,38 @@ impl Display for Operand {
     fn fmt(&self, fmt: &mut Formatter<'_>) -> FmtResult {
         match self {
             Operand::Immediate(value) => write!(fmt, "{}", value),
+            Operand::Register(i) => write!(fmt, "R{}", i),
+            Operand::Reference {
+                register,
+                offset: 0,
+            } => write!(fmt, "[R{}]", register),
+            Operand::Reference { register, offset } => write!(fmt, "[R{}{:+}]", register, offset),
+            Operand::Stack(0) => write!(fmt, "[SP]"),
+            Operand::Stack(offset) => write!(fmt, "[SP{:+}]", offset),
+        }
+    }
+}
+
+impl LowerHex for Operand {
+    fn fmt(&self, fmt: &mut Formatter<'_>) -> FmtResult {
+        match self {
+            Operand::Immediate(value) => write!(fmt, "{:#x}", value),
+            Operand::Register(i) => write!(fmt, "R{}", i),
+            Operand::Reference {
+                register,
+                offset: 0,
+            } => write!(fmt, "[R{}]", register),
+            Operand::Reference { register, offset } => write!(fmt, "[R{}{:+}]", register, offset),
+            Operand::Stack(0) => write!(fmt, "[SP]"),
+            Operand::Stack(offset) => write!(fmt, "[SP{:+}]", offset),
+        }
+    }
+}
+
+impl UpperHex for Operand {
+    fn fmt(&self, fmt: &mut Formatter<'_>) -> FmtResult {
+        match self {
+            Operand::Immediate(value) => write!(fmt, "{:#X}", value),
             Operand::Register(i) => write!(fmt, "R{}", i),
             Operand::Reference {
                 register,
