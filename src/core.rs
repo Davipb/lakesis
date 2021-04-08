@@ -5,6 +5,8 @@ pub type UWord = u64;
 pub type IWord = i64;
 pub type RegisterIndex = u8;
 
+pub const REGISTER_NUM: usize = 4;
+
 #[derive(Debug)]
 pub struct Error {
     message: Option<String>,
@@ -40,5 +42,11 @@ impl std::error::Error for Error {}
 impl From<std::io::Error> for Error {
     fn from(e: std::io::Error) -> Self {
         Error::new(&e.to_string())
+    }
+}
+
+impl From<Error> for std::io::Error {
+    fn from(e: Error) -> Self {
+        std::io::Error::new(std::io::ErrorKind::Other, e)
     }
 }

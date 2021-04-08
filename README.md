@@ -44,6 +44,9 @@ All values following the mnemonic or non-numeric bytes in the opcode are operand
 * NOP  
 `00`  
 Does nothing
+* NATIVE num  
+`1C num`  
+Calls the native function identified by `num`. For a list of available native functions, check the section below.
 * HALT  
 `3F`  
 Stops program execution
@@ -58,7 +61,7 @@ Adds `src` to `dst` and stores the result in `dst`. If either operand is a refer
 `03 src dst`  
 Subtracts `src` from `dst` and stores the result in `dst`. If either operand is a reference, `dst` is marked as reference. Otherwise, it is marked as regular data.
     * ZF = result is zero
-    * CF = operation *didn't* cause an underflow
+    * CF = operation caused an underflow
 * MUL src, dst  
 `04 src dst`  
 Multiplies `src` and `dst` and stores the result in `dst`. If either operand is a reference, `dst` is marked as reference. Otherwise, it is marked as regular data.
@@ -91,12 +94,12 @@ Negates all bits of `x`. The current data type of `x` is maintained.
 `0A bits x`  
 Shifts the value of `x` by `bits` bits to the left and stores the result in `x`. The current data type of `x` is maintained.
     * ZF = result is zero
-    * CF = at least one bit shifted out of the number was set
+    * CF = 0
 * SHR bits, x  
 `0B bits x`  
 Shifts the value of `x` by `bits` bits to the right and stores the result in `x`. The current data type of `x` is maintained.
     * ZF = result is zero
-    * CF = at least one bit shifted out of the number was set
+    * CF = 0
 
 #### Flow control
 * CMP a, b  
@@ -124,7 +127,7 @@ Jumps to the specified address if CF = 1 (a >= b)
 Jumps to the specified address if CF = 0 (a < b)
 * JLE addr  
 `13 addr`  
-Jumps to the specified address if ZF = 1 or CF = 0 (a <= b)
+Jumps to the specified address if ZF = 1 or CF = 0 (a < b)
 * CALL addr  
 `14 addr`  
 Pushes the address of the next instruction to the stack and jumps to the specified address. The pushed address is marked as a reference. Used to call subroutines.
@@ -200,6 +203,13 @@ Stack reference
     * Assembly syntax examples:  
     `PUSH [SP]`  
     `PUSH [SP+8]`
+
+## Native functions
+Native functions can be called through the NATIVE `1D` instruction. The native functions are:
+
+* `00`  
+Print  
+Accepts two arguments: 64-bit length `L` and a reference `R`, in that order (pushed to the stack according to the calling convention). Reads `L` bytes from the memory region `R` points to, interprets them as a UTF-8 text string, and prints them to stdout.
 
 ## Calling convention
 Arguments are pushed to the stack in reverse order and cleaned up by the caller. 

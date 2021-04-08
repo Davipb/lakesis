@@ -236,7 +236,7 @@ impl Parser<'_> {
                     descriptor.mnemonic,
                     i + 1,
                     expected,
-                    actual
+                    operands[i]
                 )));
             }
         }

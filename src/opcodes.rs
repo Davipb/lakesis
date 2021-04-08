@@ -48,6 +48,7 @@ pub enum Instruction {
     GarbageCollector,
     Reference,
     Unreference,
+    CallNative,
     Halt = 0x3F,
 }
 
@@ -171,7 +172,7 @@ impl Display for Opcode {
 }
 
 impl Instruction {
-    pub const MASK: u8 = 0b0011_111;
+    pub const MASK: u8 = 0b0011_1111;
     pub const SHIFT: usize = 6;
 
     pub fn decode(value: u8) -> Result<Instruction> {
@@ -455,6 +456,14 @@ impl InstructionRepository {
             InstructionDescriptor {
                 mnemonic: "unref",
                 operands: &[OperandMode::ReadWrite],
+                is_jump: false,
+            },
+        );
+        descriptors.insert(
+            Instruction::CallNative,
+            InstructionDescriptor {
+                mnemonic: "native",
+                operands: &[OperandMode::ReadOnly],
                 is_jump: false,
             },
         );

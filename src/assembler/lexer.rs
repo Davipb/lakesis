@@ -339,11 +339,11 @@ impl Lexer {
     }
 
     fn lex_register(&mut self, identifier: &str) -> Result<bool> {
-        if !identifier.starts_with('R') {
+        if !identifier.starts_with('R') && !identifier.starts_with('r') {
             return Ok(false);
         }
 
-        let reg_num_str = identifier.trim_start_matches('R');
+        let reg_num_str = identifier.trim_start_matches('R').trim_start_matches('r');
         if !reg_num_str.chars().count() == 1 {
             return Ok(false);
         }

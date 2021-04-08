@@ -1,11 +1,12 @@
 use crate::core::{Error, VoidResult};
 use std::env;
 use std::fs::File;
-use std::io::{Cursor, Read};
+use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
 mod assembler;
 mod core;
+mod interpreter;
 mod opcodes;
 
 fn main() -> VoidResult {
@@ -21,6 +22,8 @@ fn main() -> VoidResult {
     match verb {
         "view" => disassemble(args),
         "asm" => assemble(args),
+        "run" => run(args),
+        "runasm" => assemble_and_run(args),
         _ => print_help(&raw_args),
     }
 }
@@ -43,6 +46,16 @@ fn print_help(args: &[String]) -> VoidResult {
     println!("{} view <file>", program_name);
     println!("\tDisassembles an executable and displays its code");
     println!("\tfile: Path of the file to disassemble");
+    println!();
+
+    println!("{} run <file>", program_name);
+    println!("\tRuns a compiled executable");
+    println!("\tfile: Path of the executable to run");
+    println!();
+
+    println!("{} runasm <file>", program_name);
+    println!("\tCompiles an assembly source file and immediately runs it");
+    println!("\tfile: Path of the assembly source code to compile and run");
     println!();
 
     Ok(())
@@ -84,5 +97,33 @@ fn assemble(args: &[String]) -> VoidResult {
     let mut result = File::create(result_path)?;
 
     assembler::assemble(&mut source, &mut result)?;
+    Ok(())
+}
+
+fn run(args: &[String]) -> VoidResult {
+    if args.len() != 1 {
+        return Err(Error::new("Expected 1 argument"));
+    }
+
+    let mut program_data = File::open(&args[0])?;
+    interpreter::run(&mut program_data)?;
+
+    Ok(())
+}
+
+fn assemble_and_run(args: &[String]) -> VoidResult {
+    if args.len() != 1 {
+        return Err(Error::new("Expected 1 argument"));
+    }
+
+    let mut source_file = File::open(&args[0])?;
+    let mut program_data = Cursor::new(Vec::new());
+
+    assembler::assemble(&mut source_file, &mut program_data)?;
+
+    program_data.seek(SeekFrom::Start(0))?;
+
+    interpreter::run(&mut program_data)?;
+
     Ok(())
 }
