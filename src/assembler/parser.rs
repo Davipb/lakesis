@@ -20,6 +20,10 @@ pub enum TokenValue {
         value: String,
     },
     Align(UWord),
+    Define {
+        label: String,
+        value: IWord,
+    },
     Opcode {
         instruction: Instruction,
         operands: Vec<Operand>,
@@ -55,6 +59,7 @@ impl Display for TokenValue {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         match self {
             Self::Label(label) => write!(f, "{}:", label),
+            Self::Define { label, value } => write!(f, ".define {} {}", label, value),
             Self::String {
                 length_label,
                 value,
@@ -223,12 +228,13 @@ impl Parser<'_> {
         self.consume_or_error()?;
 
         match directive {
-            LexerDirective::String => self.parse_string(),
-            LexerDirective::Align => self.parse_align(),
+            LexerDirective::String => self.parse_directive_string(),
+            LexerDirective::Align => self.parse_directive_align(),
+            LexerDirective::Define => self.parse_directive_define(),
         }
     }
 
-    fn parse_string(&mut self) -> VoidResult {
+    fn parse_directive_string(&mut self) -> VoidResult {
         let length_label = match self.peek() {
             LexerTokenValue::LabelReference(s) => {
                 let owned = s.to_owned();
@@ -252,7 +258,7 @@ impl Parser<'_> {
         Ok(())
     }
 
-    fn parse_align(&mut self) -> VoidResult {
+    fn parse_directive_align(&mut self) -> VoidResult {
         let alignment = match self.peek() {
             LexerTokenValue::Number(n) => *n,
             _ => return Err(self.make_error("Expected a number")),
@@ -264,6 +270,25 @@ impl Parser<'_> {
 
         self.consume();
         self.make_token(TokenValue::Align(alignment as UWord));
+
+        Ok(())
+    }
+
+    fn parse_directive_define(&mut self) -> VoidResult {
+        let label = match self.peek() {
+            LexerTokenValue::LabelReference(l) => l.to_owned(),
+            _ => return Err(self.make_error("Expected a label")),
+        };
+
+        self.consume_or_error()?;
+
+        let value = match self.peek() {
+            LexerTokenValue::Number(n) => *n,
+            _ => return Err(self.make_error("Expected a number")),
+        };
+
+        self.consume();
+        self.make_token(TokenValue::Define { label, value });
 
         Ok(())
     }

@@ -100,6 +100,9 @@ where
     fn encode_single(&mut self) -> VoidResult {
         match self.peek().clone() {
             TokenValue::Label(s) => self.remember_label(&s)?,
+            TokenValue::Define { label, value } => {
+                self.set_label_value_without_override(&label, value as u64)?
+            }
             TokenValue::String {
                 length_label,
                 value,
@@ -135,7 +138,7 @@ where
     fn set_label_value_without_override(&mut self, name: &str, value: u64) -> VoidResult {
         match self.label_values.insert(name.to_owned(), value) {
             None => Ok(()),
-            Some(x) => Err(self.make_error(&format!("Redefinition of label {}", x))),
+            Some(_) => Err(self.make_error(&format!("Redefinition of label {}", name))),
         }
     }
 

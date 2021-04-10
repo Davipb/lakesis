@@ -1,9 +1,11 @@
 ;; Kitchen Sink
 ; This file uses all available instructions
 
+.define COMPILE_TIME_CONSTANT 1337
+
 ; Simple stuff
 nop
-mov r0, r0
+mov COMPILE_TIME_CONSTANT, r0
 push r0
 pop r0
 add r0, r0

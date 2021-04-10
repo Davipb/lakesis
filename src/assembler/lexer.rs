@@ -26,6 +26,7 @@ pub enum TokenValue {
 pub enum Directive {
     String,
     Align,
+    Define,
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
@@ -435,15 +436,12 @@ impl Lexer {
             }
         }
 
-        self.make_token(TokenValue::Directive(
-            if name.eq_ignore_ascii_case("string") {
-                Directive::String
-            } else if name.eq_ignore_ascii_case("align") {
-                Directive::Align
-            } else {
-                return Err(self.make_error(&format!("Unknown directive '{}'", name)));
-            },
-        ));
+        self.make_token(TokenValue::Directive(match name.as_str() {
+            "string" => Directive::String,
+            "align" => Directive::Align,
+            "define" => Directive::Define,
+            x => return Err(self.make_error(&format!("Unknown directive '{}'", x))),
+        }));
 
         Ok(())
     }
