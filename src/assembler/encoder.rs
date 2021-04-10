@@ -13,7 +13,7 @@ where
     tokens: &'a [Token],
     output: &'a mut T,
     index: usize,
-    label_offsets: HashMap<String, u64>,
+    label_values: HashMap<String, u64>,
     fixups: HashMap<u64, String>,
 }
 
@@ -34,7 +34,7 @@ where
             tokens,
             output,
             index: 0,
-            label_offsets: HashMap::new(),
+            label_values: HashMap::new(),
             fixups: HashMap::new(),
         }
     }
@@ -100,7 +100,10 @@ where
     fn encode_single(&mut self) -> VoidResult {
         match self.peek().clone() {
             TokenValue::Label(s) => self.remember_label(&s)?,
-            TokenValue::String(s) => self.encode_string(&s)?,
+            TokenValue::String {
+                length_label,
+                value,
+            } => self.encode_string(length_label.as_ref(), &value)?,
             TokenValue::Align(n) => self.align_output(n)?,
             TokenValue::Opcode {
                 instruction,
@@ -126,14 +129,23 @@ where
 
     fn remember_label(&mut self, name: &str) -> VoidResult {
         let offset = self.offset()?;
-        match self.label_offsets.insert(name.to_owned(), offset) {
+        self.set_label_value_without_override(name, offset)
+    }
+
+    fn set_label_value_without_override(&mut self, name: &str, value: u64) -> VoidResult {
+        match self.label_values.insert(name.to_owned(), value) {
             None => Ok(()),
             Some(x) => Err(self.make_error(&format!("Redefinition of label {}", x))),
         }
     }
 
-    fn encode_string(&mut self, string: &str) -> VoidResult {
-        self.write(string.as_bytes())
+    fn encode_string(&mut self, length_label: Option<&String>, value: &str) -> VoidResult {
+        let bytes = value.as_bytes();
+        if let Some(label) = length_label {
+            self.set_label_value_without_override(label, bytes.len() as u64)?;
+        }
+
+        self.write(bytes)
     }
 
     fn encode_opcode(&mut self, instr: Instruction, operands: &[Operand]) -> VoidResult {
@@ -231,7 +243,7 @@ where
 
     fn fixup(&mut self) -> VoidResult {
         for (offset, label) in &self.fixups {
-            let label_value = match self.label_offsets.get(label) {
+            let label_value = match self.label_values.get(label) {
                 Some(x) => *x,
                 None => return Err(Error::from_message(&format!("Label {} not found", label))),
             };

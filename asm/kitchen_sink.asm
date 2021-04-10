@@ -51,12 +51,9 @@ l7: call subroutine
 ; Native
 mov string, r0
 ref r0
-push r0
 
-mov string_end, r0
-sub string, r0
 push r0
-
+push string_len
 native 0
 pop r0
 pop r0
@@ -66,6 +63,4 @@ halt
 subroutine: ret
 
 .align 1w
-string:
-.string "Hello\n\"Beautiful\"\n\\world\\!"
-string_end:
+string: .string string_len "Hello\n\"Beautiful\"\n\\world\\!"

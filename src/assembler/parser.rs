@@ -1,6 +1,5 @@
 use super::lexer::{
-    AssemblerInstruction as LexerAssemblerInstruction, Token as LexerToken,
-    TokenValue as LexerTokenValue,
+    Directive as LexerDirective, Token as LexerToken, TokenValue as LexerTokenValue,
 };
 use super::{Error, FilePosition, FileRange, Result, VoidResult};
 use crate::core::{IWord, RegisterIndex, UWord};
@@ -16,7 +15,10 @@ pub struct Token {
 #[derive(PartialEq, Eq, Clone)]
 pub enum TokenValue {
     Label(String),
-    String(String),
+    String {
+        length_label: Option<String>,
+        value: String,
+    },
     Align(UWord),
     Opcode {
         instruction: Instruction,
@@ -53,7 +55,19 @@ impl Display for TokenValue {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         match self {
             Self::Label(label) => write!(f, "{}:", label),
-            Self::String(string) => write!(f, ".string \"{}\"", string),
+            Self::String {
+                length_label,
+                value,
+            } => {
+                write!(f, ".string ")?;
+
+                if let Some(label) = length_label {
+                    write!(f, "{} ", label)?;
+                }
+
+                write!(f, "\"{}\"", value.escape_default())
+            }
+
             Self::Align(alignment) => write!(f, ".align {}", alignment),
             Self::Opcode {
                 instruction,
@@ -189,8 +203,8 @@ impl Parser<'_> {
             return Ok(());
         }
 
-        if let LexerTokenValue::AssemblerInstruction(instruction) = self.peek() {
-            return self.parse_assembler_instruction();
+        if let LexerTokenValue::Directive(instruction) = self.peek() {
+            return self.parse_directive();
         }
 
         if let LexerTokenValue::Instruction(_) = self.peek() {
@@ -200,28 +214,40 @@ impl Parser<'_> {
         Err(self.make_error("Expected label or instruction"))
     }
 
-    fn parse_assembler_instruction(&mut self) -> VoidResult {
-        let instruction = match self.peek() {
-            LexerTokenValue::AssemblerInstruction(x) => *x,
-            _ => return Err(self.make_error("Expected assembler instruction")),
+    fn parse_directive(&mut self) -> VoidResult {
+        let directive = match self.peek() {
+            LexerTokenValue::Directive(x) => *x,
+            _ => return Err(self.make_error("Expected directive")),
         };
 
         self.consume_or_error()?;
 
-        match instruction {
-            LexerAssemblerInstruction::String => self.parse_string(),
-            LexerAssemblerInstruction::Align => self.parse_align(),
+        match directive {
+            LexerDirective::String => self.parse_string(),
+            LexerDirective::Align => self.parse_align(),
         }
     }
 
     fn parse_string(&mut self) -> VoidResult {
-        let string = match self.peek() {
+        let length_label = match self.peek() {
+            LexerTokenValue::LabelReference(s) => {
+                let owned = s.to_owned();
+                self.consume_or_error()?;
+                Some(owned)
+            }
+            _ => None,
+        };
+
+        let value = match self.peek() {
             LexerTokenValue::StringLiteral(str) => str.to_owned(),
             _ => return Err(self.make_error("Expected string literal")),
         };
 
         self.consume();
-        self.make_token(TokenValue::String(string));
+        self.make_token(TokenValue::String {
+            length_label,
+            value,
+        });
 
         Ok(())
     }

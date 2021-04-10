@@ -17,13 +17,13 @@ pub enum TokenValue {
     ArgumentSeparator,
     OffsetPositive,
     OffsetNegative,
-    AssemblerInstruction(AssemblerInstruction),
+    Directive(Directive),
     StringLiteral(String),
     CharacterLiteral(char),
 }
 
 #[derive(PartialEq, Eq, Debug, Copy, Clone)]
-pub enum AssemblerInstruction {
+pub enum Directive {
     String,
     Align,
 }
@@ -260,7 +260,7 @@ impl Lexer {
 
         if self.reader.peek() == '.' {
             self.reader.consume();
-            return self.lex_assembler_instruction();
+            return self.lex_directive();
         }
 
         if self.reader.peek() == '"' {
@@ -425,7 +425,7 @@ impl Lexer {
         Ok(())
     }
 
-    fn lex_assembler_instruction(&mut self) -> VoidResult {
+    fn lex_directive(&mut self) -> VoidResult {
         let mut name = String::new();
 
         while self.reader.peek().is_ascii_alphabetic() {
@@ -435,13 +435,13 @@ impl Lexer {
             }
         }
 
-        self.make_token(TokenValue::AssemblerInstruction(
+        self.make_token(TokenValue::Directive(
             if name.eq_ignore_ascii_case("string") {
-                AssemblerInstruction::String
+                Directive::String
             } else if name.eq_ignore_ascii_case("align") {
-                AssemblerInstruction::Align
+                Directive::Align
             } else {
-                return Err(self.make_error(&format!("Unknown assembler instruction '{}'", name)));
+                return Err(self.make_error(&format!("Unknown directive '{}'", name)));
             },
         ));
 
