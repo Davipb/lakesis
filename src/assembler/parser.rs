@@ -1,4 +1,7 @@
-use super::lexer::{Token as LexerToken, TokenValue as LexerTokenValue};
+use super::lexer::{
+    AssemblerInstruction as LexerAssemblerInstruction, Token as LexerToken,
+    TokenValue as LexerTokenValue,
+};
 use super::{Error, FilePosition, FileRange, Result, VoidResult};
 use crate::core::{IWord, RegisterIndex, UWord};
 use crate::opcodes::{Instruction, OperandMode};
@@ -13,6 +16,7 @@ pub struct Token {
 #[derive(PartialEq, Eq, Clone)]
 pub enum TokenValue {
     Label(String),
+    String(String),
     Opcode {
         instruction: Instruction,
         operands: Vec<Operand>,
@@ -48,6 +52,7 @@ impl Display for TokenValue {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         match self {
             Self::Label(label) => write!(f, "{}:", label),
+            Self::String(string) => write!(f, ".string \"{}\"", string),
             Self::Opcode {
                 instruction,
                 operands,
@@ -182,12 +187,40 @@ impl Parser<'_> {
             return Ok(());
         }
 
+        if let LexerTokenValue::AssemblerInstruction(instruction) = self.peek() {
+            return self.parse_assembler_instruction();
+        }
+
         if let LexerTokenValue::Instruction(_) = self.peek() {
-            self.parse_opcode()?;
-            return Ok(());
+            return self.parse_opcode();
         }
 
         Err(self.make_error("Expected label or instruction"))
+    }
+
+    fn parse_assembler_instruction(&mut self) -> VoidResult {
+        let instruction = match self.peek() {
+            LexerTokenValue::AssemblerInstruction(x) => *x,
+            _ => return Err(self.make_error("Expected assembler instruction")),
+        };
+
+        self.consume_or_error()?;
+
+        match instruction {
+            LexerAssemblerInstruction::String => self.parse_string(),
+        }
+    }
+
+    fn parse_string(&mut self) -> VoidResult {
+        let string = match self.peek() {
+            LexerTokenValue::StringLiteral(str) => str.to_owned(),
+            _ => return Err(self.make_error("Expected string literal")),
+        };
+
+        self.consume();
+        self.make_token(TokenValue::String(string));
+
+        Ok(())
     }
 
     fn parse_opcode(&mut self) -> VoidResult {

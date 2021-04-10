@@ -79,8 +79,13 @@ where
         !self.is_eof()
     }
 
+    fn write(&mut self, bytes: &[u8]) -> VoidResult {
+        self.output.write_all(bytes)?;
+        Ok(())
+    }
+
     fn write_byte(&mut self, byte: u8) -> VoidResult {
-        Ok(self.output.write_all(slice::from_ref(&byte))?)
+        self.write(slice::from_ref(&byte))
     }
 
     fn encode(mut self) -> VoidResult {
@@ -95,6 +100,7 @@ where
     fn encode_single(&mut self) -> VoidResult {
         match self.peek().clone() {
             TokenValue::Label(s) => self.remember_label(&s)?,
+            TokenValue::String(s) => self.encode_string(&s)?,
             TokenValue::Opcode {
                 instruction,
                 operands,
@@ -111,6 +117,10 @@ where
             None => Ok(()),
             Some(x) => Err(self.make_error(&format!("Redefinition of label {}", x))),
         }
+    }
+
+    fn encode_string(&mut self, string: &str) -> VoidResult {
+        self.write(string.as_bytes())
     }
 
     fn encode_opcode(&mut self, instr: Instruction, operands: &[Operand]) -> VoidResult {
@@ -162,7 +172,7 @@ where
             self.fixups.insert(offset, label.to_owned());
         }
 
-        self.output.write_all(&value_bytes)?;
+        self.write(&value_bytes)?;
         Ok(())
     }
 

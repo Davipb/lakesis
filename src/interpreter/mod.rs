@@ -3,11 +3,14 @@ use crate::opcodes::{Instruction, Opcode, Operand};
 use memory::{Memory, MemoryReader};
 use std::fmt::{Display, Formatter, LowerHex, UpperHex};
 use std::io::{self, Read};
+use std::net::Shutdown::Write;
+use std::num::Wrapping;
 use std::ops::{Add, BitAnd, BitOr, BitXor, Div, Mul, Not, Shl, Shr, Sub};
 
 mod memory;
 
 const UWORD_BYTE_SIZE: UWord = std::mem::size_of::<UWord>() as UWord;
+const STACK_SIZE: UWord = UWORD_BYTE_SIZE * 0xFF;
 
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct DataValue<T> {
@@ -20,8 +23,8 @@ pub type DataWord = DataValue<UWord>;
 #[derive(Clone, Debug, Default)]
 struct CpuState {
     registers: [DataWord; REGISTER_NUM],
-    stack_pointer: UWord,
-    instruction_pointer: UWord,
+    stack_pointer: Wrapping<UWord>,
+    instruction_pointer: Wrapping<UWord>,
     carry_flag: bool,
     zero_flag: bool,
 }
@@ -244,7 +247,7 @@ where
         if self.is_reference {
             write!(f, "[R]")?;
         }
-        write!(f, "{:X}", self.value)?;
+        write!(f, "{:02X}", self.value)?;
         Ok(())
     }
 }
@@ -259,7 +262,7 @@ impl Interpreter {
 
     fn step(&mut self) -> Result<bool> {
         let opcode = Opcode::decode(&mut self.ip_reader())?;
-        println!("{}", opcode);
+        println!("LAKESIS | {}", opcode);
 
         match opcode.instruction {
             Instruction::NoOperation => {}
@@ -271,10 +274,12 @@ impl Interpreter {
             }
 
             Instruction::Add => self.combine_with_carry(&opcode, DataWord::overflowing_add)?,
-            Instruction::Subtract => self.combine_with_carry(&opcode, DataWord::overflowing_sub)?,
+            Instruction::Subtract => {
+                self.reverse_combine_with_carry(&opcode, DataWord::overflowing_sub)?
+            }
             Instruction::Multiply => self.combine_with_carry(&opcode, DataWord::overflowing_mul)?,
             Instruction::Divide => {
-                self.combine_with_carry(&opcode, |src, dst| dst.overflowing_div(src))?
+                self.reverse_combine_with_carry(&opcode, DataWord::overflowing_div)?
             }
 
             Instruction::BitwiseAnd => self.combine(&opcode, DataWord::bitand)?,
@@ -321,10 +326,10 @@ impl Interpreter {
                 let addr = self.read(&opcode.operands[0])?.value;
 
                 self.push_stack(DataWord {
-                    value: self.cpu_state.instruction_pointer,
+                    value: self.cpu_state.instruction_pointer.0,
                     is_reference: true,
                 })?;
-                self.cpu_state.instruction_pointer = addr;
+                self.cpu_state.instruction_pointer = Wrapping(addr);
             }
 
             Instruction::Return => {
@@ -335,7 +340,7 @@ impl Interpreter {
                     return Err(Error::new("Tried to return from a non-reference data word"));
                 }
 
-                self.cpu_state.instruction_pointer = addr.value;
+                self.cpu_state.instruction_pointer = Wrapping(addr.value);
             }
 
             Instruction::Push => {
@@ -377,7 +382,13 @@ impl Interpreter {
                 self.write(&opcode.operands[0], value)?;
             }
 
-            Instruction::CallNative => unimplemented!(),
+            Instruction::CallNative => {
+                self.ensure_operands(&opcode, 1)?;
+                match self.read(&opcode.operands[0])?.value {
+                    0 => self.native_print()?,
+                    _ => unimplemented!(),
+                }
+            }
 
             Instruction::Halt => return Ok(false),
         };
@@ -408,6 +419,14 @@ impl Interpreter {
         let result = operation(value1, value2);
 
         self.write_with_flags(&opcode.operands[1], result)
+    }
+
+    fn reverse_combine_with_carry(
+        &mut self,
+        opcode: &Opcode,
+        operation: impl FnOnce(DataWord, DataWord) -> (DataWord, bool),
+    ) -> VoidResult {
+        self.combine_with_carry(opcode, |a, b| operation(b, a))
     }
 
     fn combine_with_carry(
@@ -477,8 +496,8 @@ impl Interpreter {
 
             Operand::Stack(offset) => {
                 let base_addr = self.cpu_state.stack_pointer;
-                let (addr, _) = base_addr.overflowing_add(*offset as UWord);
-                Ok(addr)
+                let addr = base_addr + Wrapping(*offset as UWord);
+                Ok(addr.0)
             }
 
             _ => panic!(
@@ -513,45 +532,61 @@ impl Interpreter {
     fn jump(&mut self, opcode: &Opcode) -> VoidResult {
         self.ensure_operands(&opcode, 1)?;
         let addr = self.read(&opcode.operands[0])?.value;
-        self.cpu_state.instruction_pointer = addr;
+        self.cpu_state.instruction_pointer = Wrapping(addr);
         Ok(())
     }
 
     fn push_stack(&mut self, value: DataWord) -> VoidResult {
-        self.memory
-            .set_data_word(self.cpu_state.stack_pointer, value)?;
-        let (new_sp, _) = self
-            .cpu_state
-            .stack_pointer
-            .overflowing_sub(UWORD_BYTE_SIZE);
-        self.cpu_state.stack_pointer = new_sp;
+        println!(
+            "LAKESIS | Push@{:X}: {:X}",
+            self.cpu_state.stack_pointer, value
+        );
 
-        println!("Pushed to the stack: {}", value);
+        self.memory
+            .set_data_word(self.cpu_state.stack_pointer.0, value)?;
+        self.cpu_state.stack_pointer -= Wrapping(UWORD_BYTE_SIZE);
+
         Ok(())
     }
 
     fn pop_stack(&mut self) -> Result<DataWord> {
-        let (last_stack_item, _) = self
-            .cpu_state
-            .stack_pointer
-            .overflowing_add(UWORD_BYTE_SIZE);
+        self.cpu_state.stack_pointer += Wrapping(UWORD_BYTE_SIZE);
+        let result = self.memory.get_data_word(self.cpu_state.stack_pointer.0)?;
 
-        let result = self.memory.get_data_word(last_stack_item)?;
-        self.cpu_state.stack_pointer = last_stack_item;
-
-        println!("Popped from the stack: {}", result);
+        println!(
+            "LAKESIS | Pop@{:X}: {:X}",
+            self.cpu_state.stack_pointer, result
+        );
         Ok(result)
+    }
+
+    fn read_native_parameter(&self, parameter_index: UWord) -> Result<DataWord> {
+        let byte_offset = Wrapping(parameter_index + 1) * Wrapping(UWORD_BYTE_SIZE);
+        let address = self.cpu_state.stack_pointer + byte_offset;
+
+        self.memory.get_data_word(address.0)
+    }
+
+    fn native_print(&mut self) -> VoidResult {
+        let string_len = self.read_native_parameter(0)?;
+        let string_base_addr = self.read_native_parameter(1)?;
+
+        let utf8_data = self.memory.get(string_base_addr.value, string_len.value)?;
+        let string = String::from_utf8_lossy(utf8_data);
+        println!("{}", string);
+
+        Ok(())
     }
 }
 
 impl Display for Interpreter {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         for i in 0..REGISTER_NUM {
-            write!(f, "R{}={:X}, ", i, self.cpu_state.registers[i])?;
+            write!(f, "R{}={:02X} ", i, self.cpu_state.registers[i])?;
         }
 
-        write!(f, "IP={:X}, ", self.cpu_state.instruction_pointer)?;
-        write!(f, "SP={:X}, ", self.cpu_state.stack_pointer)?;
+        write!(f, "IP={:02X} ", self.cpu_state.instruction_pointer)?;
+        write!(f, "SP={:02X} ", self.cpu_state.stack_pointer)?;
 
         if self.cpu_state.carry_flag {
             write!(f, "C");
@@ -573,14 +608,12 @@ impl Read for InterpreterInstructionPointerReader<'_> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let data = self
             .memory
-            .get(self.cpu_state.instruction_pointer, buf.len() as UWord)?;
+            .get(self.cpu_state.instruction_pointer.0, buf.len() as UWord)?;
         buf.copy_from_slice(data);
-        self.cpu_state.instruction_pointer += buf.len() as UWord;
+        self.cpu_state.instruction_pointer += Wrapping(buf.len() as UWord);
         Ok(buf.len())
     }
 }
-
-const STACK_SIZE: UWord = UWORD_BYTE_SIZE * 0xFF;
 
 pub fn run(reader: &mut impl Read) -> VoidResult {
     let mut interpreter = Interpreter {
@@ -603,12 +636,13 @@ pub fn run(reader: &mut impl Read) -> VoidResult {
     interpreter.memory.set(0, &program_data)?;
 
     let stack_base = interpreter.memory.allocate(STACK_SIZE, None)?;
-    interpreter.cpu_state.stack_pointer = stack_base + STACK_SIZE - UWORD_BYTE_SIZE;
+    interpreter.cpu_state.stack_pointer =
+        Wrapping(stack_base) + Wrapping(STACK_SIZE) - Wrapping(UWORD_BYTE_SIZE);
 
-    println!("{}", interpreter);
+    println!("LAKESIS | {}", interpreter);
 
     while interpreter.step()? {
-        println!("{}", interpreter);
+        println!("LAKESIS | {}", interpreter);
     }
 
     Ok(())

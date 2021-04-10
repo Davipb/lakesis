@@ -34,6 +34,19 @@ l5: jlt l6
 l6: jle l7
 l7: call subroutine
 
+; Native
+mov string_end, r0
+sub string, r0
+push string
+push r0
+native 0
+pop r0
+pop r0
+
 halt
 
 subroutine: ret
+
+string:
+.string "Hello, world!"
+string_end:

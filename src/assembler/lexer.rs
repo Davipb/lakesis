@@ -17,6 +17,13 @@ pub enum TokenValue {
     ArgumentSeparator,
     OffsetPositive,
     OffsetNegative,
+    AssemblerInstruction(AssemblerInstruction),
+    StringLiteral(String),
+}
+
+#[derive(PartialEq, Eq, Debug, Copy, Clone)]
+pub enum AssemblerInstruction {
+    String,
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
@@ -249,6 +256,16 @@ impl Lexer {
             return Ok(());
         }
 
+        if self.reader.peek() == '.' {
+            self.reader.consume();
+            return self.lex_assembler_instruction();
+        }
+
+        if self.reader.peek() == '"' {
+            self.reader.consume();
+            return self.lex_string();
+        }
+
         if self.reader.peek().is_digit(10) {
             return self.lex_number();
         }
@@ -309,6 +326,32 @@ impl Lexer {
         Ok(())
     }
 
+    fn lex_string(&mut self) -> VoidResult {
+        let mut string = String::new();
+
+        while self.reader.peek() != '"' {
+            if self.reader.peek() == '\\' {
+                self.reader.consume_or_error()?;
+
+                match self.reader.peek() {
+                    'n' => string.push('\n'),
+                    '"' => string.push('\"'),
+                    '\\' => string.push('\\'),
+                    x => return Err(self.make_error(&format!("Unknown escape sequence \\{}", x))),
+                }
+            } else {
+                string.push(self.reader.peek());
+            }
+
+            self.reader.consume_or_error()?;
+        }
+
+        self.reader.consume();
+        self.make_token(TokenValue::StringLiteral(string));
+
+        Ok(())
+    }
+
     fn lex_identifier(&mut self) -> VoidResult {
         let mut name = String::new();
 
@@ -336,6 +379,26 @@ impl Lexer {
 
         self.make_token(TokenValue::LabelReference(name));
         Ok(())
+    }
+
+    fn lex_assembler_instruction(&mut self) -> VoidResult {
+        let mut name = String::new();
+
+        while self.reader.peek().is_ascii_alphabetic() {
+            name.push(self.reader.peek());
+            if !self.reader.consume() {
+                break;
+            }
+        }
+
+        if name.eq_ignore_ascii_case("string") {
+            self.make_token(TokenValue::AssemblerInstruction(
+                AssemblerInstruction::String,
+            ));
+            return Ok(());
+        }
+
+        Err(self.make_error(&format!("Unknown assembler instruction '{}'", name)))
     }
 
     fn lex_register(&mut self, identifier: &str) -> Result<bool> {
