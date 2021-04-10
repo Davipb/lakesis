@@ -1,5 +1,5 @@
 use super::{Error, FilePosition, FileRange, Result, VoidResult};
-use crate::core::RegisterIndex;
+use crate::core::{IWord, RegisterIndex, UWord, WORD_BYTE_SIZE};
 use crate::opcodes::Instruction;
 use std::fmt::{Debug, Display, Formatter, Result as FmtResult};
 use std::io::Read;
@@ -19,11 +19,13 @@ pub enum TokenValue {
     OffsetNegative,
     AssemblerInstruction(AssemblerInstruction),
     StringLiteral(String),
+    CharacterLiteral(char),
 }
 
 #[derive(PartialEq, Eq, Debug, Copy, Clone)]
 pub enum AssemblerInstruction {
     String,
+    Align,
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
@@ -266,6 +268,11 @@ impl Lexer {
             return self.lex_string();
         }
 
+        if self.reader.peek() == '\'' {
+            self.reader.consume();
+            return self.lex_character();
+        }
+
         if self.reader.peek().is_digit(10) {
             return self.lex_number();
         }
@@ -299,17 +306,27 @@ impl Lexer {
         let radix = if self.reader.peek() == '0' && self.reader.peek_around(1) == 'x' {
             self.reader.consume_many_or_error(2)?;
             16
+        } else if self.reader.peek() == '0' && self.reader.peek_around(1) == 'b' {
+            self.reader.consume_many_or_error(2)?;
+            2
         } else {
             10
         };
 
         let mut digits = String::new();
-        while self.reader.peek().is_alphanumeric() {
+        while self.reader.peek().is_digit(radix) {
             digits.push(self.reader.peek());
             if !self.reader.consume() {
                 break;
             }
         }
+
+        let multiplier = if self.reader.peek() == 'w' {
+            self.reader.consume();
+            WORD_BYTE_SIZE as IWord
+        } else {
+            1
+        };
 
         if digits.is_empty() {
             return Err(self.make_error("Numbers need at least one digit"));
@@ -320,7 +337,9 @@ impl Lexer {
             Ok(x) => x,
         };
 
-        let num = if is_positive { raw_num } else { -raw_num };
+        let signed_num = if is_positive { raw_num } else { -raw_num };
+        let num = signed_num * multiplier;
+
         self.make_token(TokenValue::Number(num));
 
         Ok(())
@@ -348,6 +367,31 @@ impl Lexer {
 
         self.reader.consume();
         self.make_token(TokenValue::StringLiteral(string));
+
+        Ok(())
+    }
+
+    fn lex_character(&mut self) -> VoidResult {
+        let character = if self.reader.peek() == '\\' {
+            self.reader.consume_or_error()?;
+
+            match self.reader.peek() {
+                '\'' => '\'',
+                'n' => '\n',
+                '\\' => '\\',
+                x => return Err(self.make_error(&format!("Unknown escape sequence \\{}", x))),
+            }
+        } else {
+            self.reader.peek()
+        };
+
+        self.reader.consume_or_error();
+        if self.reader.peek() != '\'' {
+            return Err(self.make_error("Unterminated character literal"));
+        }
+
+        self.reader.consume();
+        self.make_token(TokenValue::CharacterLiteral(character));
 
         Ok(())
     }
@@ -391,14 +435,17 @@ impl Lexer {
             }
         }
 
-        if name.eq_ignore_ascii_case("string") {
-            self.make_token(TokenValue::AssemblerInstruction(
-                AssemblerInstruction::String,
-            ));
-            return Ok(());
-        }
+        self.make_token(TokenValue::AssemblerInstruction(
+            if name.eq_ignore_ascii_case("string") {
+                AssemblerInstruction::String
+            } else if name.eq_ignore_ascii_case("align") {
+                AssemblerInstruction::Align
+            } else {
+                return Err(self.make_error(&format!("Unknown assembler instruction '{}'", name)));
+            },
+        ));
 
-        Err(self.make_error(&format!("Unknown assembler instruction '{}'", name)))
+        Ok(())
     }
 
     fn lex_register(&mut self, identifier: &str) -> Result<bool> {

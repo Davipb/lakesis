@@ -17,6 +17,7 @@ pub struct Token {
 pub enum TokenValue {
     Label(String),
     String(String),
+    Align(UWord),
     Opcode {
         instruction: Instruction,
         operands: Vec<Operand>,
@@ -53,6 +54,7 @@ impl Display for TokenValue {
         match self {
             Self::Label(label) => write!(f, "{}:", label),
             Self::String(string) => write!(f, ".string \"{}\"", string),
+            Self::Align(alignment) => write!(f, ".align {}", alignment),
             Self::Opcode {
                 instruction,
                 operands,
@@ -208,6 +210,7 @@ impl Parser<'_> {
 
         match instruction {
             LexerAssemblerInstruction::String => self.parse_string(),
+            LexerAssemblerInstruction::Align => self.parse_align(),
         }
     }
 
@@ -219,6 +222,22 @@ impl Parser<'_> {
 
         self.consume();
         self.make_token(TokenValue::String(string));
+
+        Ok(())
+    }
+
+    fn parse_align(&mut self) -> VoidResult {
+        let alignment = match self.peek() {
+            LexerTokenValue::Number(n) => *n,
+            _ => return Err(self.make_error("Expected a number")),
+        };
+
+        if alignment <= 1 {
+            return Err(self.make_error("Alignment must be bigger than 1"));
+        }
+
+        self.consume();
+        self.make_token(TokenValue::Align(alignment as UWord));
 
         Ok(())
     }
@@ -293,6 +312,7 @@ impl Parser<'_> {
             LexerTokenValue::LabelReference(label) => Some(Operand::Label(label.clone())),
             LexerTokenValue::Number(n) => Some(Operand::Immediate(*n)),
             LexerTokenValue::Register(i) => Some(Operand::Register(*i)),
+            LexerTokenValue::CharacterLiteral(c) => Some(Operand::Immediate(*c as IWord)),
             LexerTokenValue::StartReference => {
                 consume = false;
                 Some(self.parse_reference_or_stack()?)

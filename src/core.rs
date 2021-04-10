@@ -6,6 +6,7 @@ pub type IWord = i64;
 pub type RegisterIndex = u8;
 
 pub const REGISTER_NUM: usize = 4;
+pub const WORD_BYTE_SIZE: UWord = std::mem::size_of::<UWord>() as UWord;
 
 #[derive(Debug)]
 pub struct Error {

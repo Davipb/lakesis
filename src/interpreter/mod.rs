@@ -1,4 +1,4 @@
-use crate::core::{Error, IWord, Result, UWord, VoidResult, REGISTER_NUM};
+use crate::core::{Error, IWord, Result, UWord, VoidResult, REGISTER_NUM, WORD_BYTE_SIZE};
 use crate::opcodes::{Instruction, Opcode, Operand};
 use memory::{Memory, MemoryReader};
 use std::fmt::{Display, Formatter, LowerHex, UpperHex};
@@ -9,8 +9,7 @@ use std::ops::{Add, BitAnd, BitOr, BitXor, Div, Mul, Not, Shl, Shr, Sub};
 
 mod memory;
 
-const UWORD_BYTE_SIZE: UWord = std::mem::size_of::<UWord>() as UWord;
-const STACK_SIZE: UWord = UWORD_BYTE_SIZE * 0xFF;
+const STACK_SIZE: UWord = WORD_BYTE_SIZE * 0xFF;
 
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct DataValue<T> {
@@ -544,13 +543,13 @@ impl Interpreter {
 
         self.memory
             .set_data_word(self.cpu_state.stack_pointer.0, value)?;
-        self.cpu_state.stack_pointer -= Wrapping(UWORD_BYTE_SIZE);
+        self.cpu_state.stack_pointer -= Wrapping(WORD_BYTE_SIZE);
 
         Ok(())
     }
 
     fn pop_stack(&mut self) -> Result<DataWord> {
-        self.cpu_state.stack_pointer += Wrapping(UWORD_BYTE_SIZE);
+        self.cpu_state.stack_pointer += Wrapping(WORD_BYTE_SIZE);
         let result = self.memory.get_data_word(self.cpu_state.stack_pointer.0)?;
 
         println!(
@@ -561,7 +560,7 @@ impl Interpreter {
     }
 
     fn read_native_parameter(&self, parameter_index: UWord) -> Result<DataWord> {
-        let byte_offset = Wrapping(parameter_index + 1) * Wrapping(UWORD_BYTE_SIZE);
+        let byte_offset = Wrapping(parameter_index + 1) * Wrapping(WORD_BYTE_SIZE);
         let address = self.cpu_state.stack_pointer + byte_offset;
 
         self.memory.get_data_word(address.0)
@@ -570,6 +569,10 @@ impl Interpreter {
     fn native_print(&mut self) -> VoidResult {
         let string_len = self.read_native_parameter(0)?;
         let string_base_addr = self.read_native_parameter(1)?;
+
+        if !string_base_addr.is_reference {
+            return Err(Error::new("Base address provided isn't a reference"));
+        }
 
         let utf8_data = self.memory.get(string_base_addr.value, string_len.value)?;
         let string = String::from_utf8_lossy(utf8_data);
@@ -625,7 +628,7 @@ pub fn run(reader: &mut impl Read) -> VoidResult {
     reader.read_to_end(&mut program_data)?;
 
     let mut aligned_len = program_data.len() as UWord;
-    while aligned_len % UWORD_BYTE_SIZE != 0 {
+    while aligned_len % WORD_BYTE_SIZE != 0 {
         aligned_len += 1;
     }
 
@@ -637,7 +640,7 @@ pub fn run(reader: &mut impl Read) -> VoidResult {
 
     let stack_base = interpreter.memory.allocate(STACK_SIZE, None)?;
     interpreter.cpu_state.stack_pointer =
-        Wrapping(stack_base) + Wrapping(STACK_SIZE) - Wrapping(UWORD_BYTE_SIZE);
+        Wrapping(stack_base) + Wrapping(STACK_SIZE) - Wrapping(WORD_BYTE_SIZE);
 
     println!("LAKESIS | {}", interpreter);
 

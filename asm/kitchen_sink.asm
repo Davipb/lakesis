@@ -18,8 +18,22 @@ shl r0, r0
 shr r0, r0
 cmp r0, r0
 
+; Number bases and multipliers
+mov 1, r0
+mov -1, r0
+mov 0xA, r0
+mov -0xA, r0
+mov 0b10, r0
+mov -0b10, r0
+mov 1w, r0
+mov -1w, r0
+mov 0xAw, r0
+mov -0xAw, r0
+mov 0b10w, r0
+mov -0b10w, r0
+
 ; Memory
-new 24, r0
+new 128w, r0
 unref r0
 ref r0
 gc
@@ -35,10 +49,14 @@ l6: jle l7
 l7: call subroutine
 
 ; Native
+mov string, r0
+ref r0
+push r0
+
 mov string_end, r0
 sub string, r0
-push string
 push r0
+
 native 0
 pop r0
 pop r0
@@ -47,6 +65,7 @@ halt
 
 subroutine: ret
 
+.align 1w
 string:
-.string "Hello, world!"
+.string "Hello\n\"Beautiful\"\n\\world\\!"
 string_end:

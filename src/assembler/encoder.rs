@@ -101,6 +101,7 @@ where
         match self.peek().clone() {
             TokenValue::Label(s) => self.remember_label(&s)?,
             TokenValue::String(s) => self.encode_string(&s)?,
+            TokenValue::Align(n) => self.align_output(n)?,
             TokenValue::Opcode {
                 instruction,
                 operands,
@@ -108,6 +109,18 @@ where
         }
 
         self.consume();
+        Ok(())
+    }
+
+    fn align_output(&mut self, alignment: UWord) -> VoidResult {
+        if alignment <= 1 {
+            return Err(self.make_error("Alignment must be bigger than 1"));
+        }
+
+        while self.offset()? % alignment != 0 {
+            self.write_byte(0)?;
+        }
+
         Ok(())
     }
 
