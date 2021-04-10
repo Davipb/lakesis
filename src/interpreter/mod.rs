@@ -260,8 +260,9 @@ impl Interpreter {
     }
 
     fn step(&mut self) -> Result<bool> {
+        let previous_ip = self.cpu_state.instruction_pointer;
         let opcode = Opcode::decode(&mut self.ip_reader())?;
-        println!("LAKESIS | {}", opcode);
+        println!("LAKESIS | {:016X} {}", previous_ip, opcode);
 
         match opcode.instruction {
             Instruction::NoOperation => {}
@@ -594,13 +595,13 @@ impl Display for Interpreter {
         if self.cpu_state.carry_flag {
             write!(f, "C");
         } else {
-            write!(f, "_");
+            write!(f, "c");
         }
 
         if self.cpu_state.zero_flag {
             write!(f, "Z");
         } else {
-            write!(f, "_");
+            write!(f, "z");
         }
 
         Ok(())

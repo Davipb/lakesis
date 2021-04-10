@@ -1,5 +1,6 @@
 use super::DataWord;
-use crate::core::{Error, Result, UWord, VoidResult};
+use crate::core::{Error, Result, UWord, VoidResult, MAX_MEMORY_SIZE, WORD_BYTE_SIZE};
+use bitvec::prelude::*;
 use std::convert::TryInto;
 use std::io::{self, Read};
 
@@ -7,14 +8,16 @@ use std::io::{self, Read};
 pub struct Memory {
     // TODO: Implement actual memory management
     data: Vec<u8>,
-    references: Vec<bool>,
+    references: BitBox,
+    first_free_address: usize,
 }
 
 impl Memory {
     pub fn new() -> Memory {
         Memory {
-            data: Vec::new(),
-            references: Vec::new(),
+            data: vec![0; MAX_MEMORY_SIZE],
+            references: bitbox![0; MAX_MEMORY_SIZE / WORD_BYTE_SIZE as usize],
+            first_free_address: 0,
         }
     }
 
@@ -44,18 +47,21 @@ impl Memory {
 
     pub fn is_reference(&self, addr: UWord) -> Result<bool> {
         Self::ensure_aligned(addr)?;
-        Ok(self.references[addr as usize / 8])
+        Ok(self.references[(addr / WORD_BYTE_SIZE) as usize])
     }
 
     pub fn set_reference(&mut self, addr: UWord, is_reference: bool) -> VoidResult {
-        self.references[addr as usize / 8] = is_reference;
+        self.references
+            .set((addr / WORD_BYTE_SIZE) as usize, is_reference);
         Ok(())
     }
 
     pub fn get_word(&self, addr: UWord) -> Result<UWord> {
         Self::ensure_aligned(addr)?;
         Ok(UWord::from_le_bytes(
-            self.get(addr, 8)?.try_into().expect("Invalid array size"),
+            self.get(addr, WORD_BYTE_SIZE)?
+                .try_into()
+                .expect("Invalid array size"),
         ))
     }
 
@@ -81,22 +87,27 @@ impl Memory {
     pub fn allocate(&mut self, size: UWord, preferred_base: Option<UWord>) -> Result<UWord> {
         if let Some(base) = preferred_base {
             Self::ensure_aligned(base)?;
-            while (self.data.len() as UWord) < base {
-                self.data.push(0);
+
+            if (base as usize) < self.first_free_address {
+                return Err(Error::new(&format!(
+                    "Unable to allocate memory at the required base {:016X}",
+                    base
+                )));
             }
+
+            self.first_free_address = base as usize;
         }
 
-        let base_addr = self.data.len() as UWord;
+        let aligned_size = Self::align(size);
+        let base_addr = self.first_free_address;
 
-        for _ in 0..size {
-            self.data.push(0);
+        let new_frist_free_address = self.first_free_address + aligned_size as usize;
+        if new_frist_free_address > MAX_MEMORY_SIZE {
+            return Err(Error::new("Out of memory"));
         }
 
-        while self.references.len() < self.data.len() / 8 {
-            self.references.push(false);
-        }
-
-        Ok(base_addr)
+        self.first_free_address = new_frist_free_address;
+        Ok(base_addr as UWord)
     }
 
     pub fn force_garbage_collection(&mut self) -> VoidResult {
@@ -105,7 +116,7 @@ impl Memory {
     }
 
     fn ensure_aligned(addr: UWord) -> VoidResult {
-        if addr % 8 != 0 {
+        if addr % WORD_BYTE_SIZE != 0 {
             Err(Error::new(&format!(
                 "Address {:016X} isn't word-aligned",
                 addr
@@ -113,6 +124,10 @@ impl Memory {
         } else {
             Ok(())
         }
+    }
+
+    fn align(addr: UWord) -> UWord {
+        ((addr as f64 / WORD_BYTE_SIZE as f64).ceil() * WORD_BYTE_SIZE as f64) as UWord
     }
 
     fn ensure_mapped(&self, addr: UWord, size: UWord) -> VoidResult {

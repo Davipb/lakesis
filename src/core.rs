@@ -7,6 +7,7 @@ pub type RegisterIndex = u8;
 
 pub const REGISTER_NUM: usize = 4;
 pub const WORD_BYTE_SIZE: UWord = std::mem::size_of::<UWord>() as UWord;
+pub const MAX_MEMORY_SIZE: usize = 1024 * 1024 * 1024; // 1 GiB
 
 #[derive(Debug)]
 pub struct Error {
