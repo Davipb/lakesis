@@ -1,6 +1,7 @@
 use crate::core::{Error, IWord, Result, UWord, VoidResult, REGISTER_NUM};
 use crate::opcodes::{Instruction, Opcode, Operand};
 use memory::{Memory, MemoryReader};
+use std::fmt::{Display, Formatter, LowerHex, UpperHex};
 use std::io::{self, Read};
 use std::ops::{Add, BitAnd, BitOr, BitXor, Div, Mul, Not, Shl, Shr, Sub};
 
@@ -212,6 +213,40 @@ impl DataWord {
     pub fn overflowing_div(self, other: DataWord) -> (DataWord, bool) {
         self.overflowing_operation(other, UWord::overflowing_div)
     }
+
+    pub fn overflowing_shl(self, other: DataWord) -> (DataWord, bool) {
+        self.overflowing_operation(other, |a, b| a.overflowing_shl(b as u32))
+    }
+
+    pub fn overflowing_shr(self, other: DataWord) -> (DataWord, bool) {
+        self.overflowing_operation(other, |a, b| a.overflowing_shr(b as u32))
+    }
+}
+
+impl<T> Display for DataValue<T>
+where
+    T: Display,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        if self.is_reference {
+            write!(f, "[R]")?;
+        }
+        write!(f, "{}", self.value)?;
+        Ok(())
+    }
+}
+
+impl<T> UpperHex for DataValue<T>
+where
+    T: UpperHex,
+{
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        if self.is_reference {
+            write!(f, "[R]")?;
+        }
+        write!(f, "{:X}", self.value)?;
+        Ok(())
+    }
 }
 
 impl Interpreter {
@@ -224,6 +259,7 @@ impl Interpreter {
 
     fn step(&mut self) -> Result<bool> {
         let opcode = Opcode::decode(&mut self.ip_reader())?;
+        println!("{}", opcode);
 
         match opcode.instruction {
             Instruction::NoOperation => {}
@@ -237,7 +273,9 @@ impl Interpreter {
             Instruction::Add => self.combine_with_carry(&opcode, DataWord::overflowing_add)?,
             Instruction::Subtract => self.combine_with_carry(&opcode, DataWord::overflowing_sub)?,
             Instruction::Multiply => self.combine_with_carry(&opcode, DataWord::overflowing_mul)?,
-            Instruction::Divide => self.combine_with_carry(&opcode, DataWord::overflowing_div)?,
+            Instruction::Divide => {
+                self.combine_with_carry(&opcode, |src, dst| dst.overflowing_div(src))?
+            }
 
             Instruction::BitwiseAnd => self.combine(&opcode, DataWord::bitand)?,
             Instruction::BitwiseOr => self.combine(&opcode, DataWord::bitor)?,
@@ -249,8 +287,12 @@ impl Interpreter {
                 self.write_with_flags(&opcode.operands[0], result)?;
             }
 
-            Instruction::ShiftLeft => self.combine(&opcode, |a, b| b << a)?,
-            Instruction::ShiftRight => self.combine(&opcode, |a, b| b >> a)?,
+            Instruction::ShiftLeft => {
+                self.combine_with_carry(&opcode, DataWord::overflowing_shl)?
+            }
+            Instruction::ShiftRight => {
+                self.combine_with_carry(&opcode, DataWord::overflowing_shr)?
+            }
 
             Instruction::Compare => {
                 self.ensure_operands(&opcode, 2)?;
@@ -478,17 +520,52 @@ impl Interpreter {
     fn push_stack(&mut self, value: DataWord) -> VoidResult {
         self.memory
             .set_data_word(self.cpu_state.stack_pointer, value)?;
-        self.cpu_state.stack_pointer -= UWORD_BYTE_SIZE;
+        let (new_sp, _) = self
+            .cpu_state
+            .stack_pointer
+            .overflowing_sub(UWORD_BYTE_SIZE);
+        self.cpu_state.stack_pointer = new_sp;
+
+        println!("Pushed to the stack: {}", value);
         Ok(())
     }
 
     fn pop_stack(&mut self) -> Result<DataWord> {
-        let result = self
-            .memory
-            .get_data_word(self.cpu_state.stack_pointer - UWORD_BYTE_SIZE)?;
-        self.cpu_state.stack_pointer += UWORD_BYTE_SIZE;
+        let (last_stack_item, _) = self
+            .cpu_state
+            .stack_pointer
+            .overflowing_add(UWORD_BYTE_SIZE);
 
+        let result = self.memory.get_data_word(last_stack_item)?;
+        self.cpu_state.stack_pointer = last_stack_item;
+
+        println!("Popped from the stack: {}", result);
         Ok(result)
+    }
+}
+
+impl Display for Interpreter {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        for i in 0..REGISTER_NUM {
+            write!(f, "R{}={:X}, ", i, self.cpu_state.registers[i])?;
+        }
+
+        write!(f, "IP={:X}, ", self.cpu_state.instruction_pointer)?;
+        write!(f, "SP={:X}, ", self.cpu_state.stack_pointer)?;
+
+        if self.cpu_state.carry_flag {
+            write!(f, "C");
+        } else {
+            write!(f, "_");
+        }
+
+        if self.cpu_state.zero_flag {
+            write!(f, "Z");
+        } else {
+            write!(f, "_");
+        }
+
+        Ok(())
     }
 }
 
@@ -503,6 +580,8 @@ impl Read for InterpreterInstructionPointerReader<'_> {
     }
 }
 
+const STACK_SIZE: UWord = UWORD_BYTE_SIZE * 0xFF;
+
 pub fn run(reader: &mut impl Read) -> VoidResult {
     let mut interpreter = Interpreter {
         cpu_state: CpuState::default(),
@@ -512,20 +591,24 @@ pub fn run(reader: &mut impl Read) -> VoidResult {
     let mut program_data = Vec::new();
     reader.read_to_end(&mut program_data)?;
 
-    if interpreter
-        .memory
-        .allocate(program_data.len() as UWord, Some(0))?
-        != 0
-    {
+    let mut aligned_len = program_data.len() as UWord;
+    while aligned_len % UWORD_BYTE_SIZE != 0 {
+        aligned_len += 1;
+    }
+
+    if interpreter.memory.allocate(aligned_len, Some(0))? != 0 {
         return Err(Error::new("Unable to allocate program data at address 0"));
     }
 
     interpreter.memory.set(0, &program_data)?;
 
-    println!("{:?}", interpreter);
+    let stack_base = interpreter.memory.allocate(STACK_SIZE, None)?;
+    interpreter.cpu_state.stack_pointer = stack_base + STACK_SIZE - UWORD_BYTE_SIZE;
+
+    println!("{}", interpreter);
 
     while interpreter.step()? {
-        println!("{:?}", interpreter);
+        println!("{}", interpreter);
     }
 
     Ok(())
