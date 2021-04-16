@@ -1,5 +1,5 @@
 use super::{Error, FilePosition, FileRange, Result, VoidResult};
-use crate::core::{IWord, RegisterIndex, UWord, WORD_BYTE_SIZE};
+use crate::core::{IWord, RegisterIndex, UWord, REGISTER_NUM, WORD_BYTE_SIZE};
 use crate::opcodes::Instruction;
 use std::fmt::{Debug, Display, Formatter, Result as FmtResult};
 use std::io::Read;
@@ -464,11 +464,11 @@ impl Lexer {
             Ok(x) => x,
         };
 
-        // TODO: Move this to a constant somewhere
-        if reg_num > 3 {
-            return Err(
-                self.make_error("Invalid register index. Must be a number from 0 to 3 inclusive.")
-            );
+        if reg_num >= REGISTER_NUM as u8 {
+            return Err(self.make_error(&format!(
+                "Invalid register index. Must be a number from 0 to {} inclusive.",
+                REGISTER_NUM - 1
+            )));
         }
 
         self.make_token(TokenValue::Register(reg_num));
