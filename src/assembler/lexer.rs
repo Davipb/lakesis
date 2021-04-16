@@ -315,8 +315,11 @@ impl Lexer {
         };
 
         let mut digits = String::new();
-        while self.reader.peek().is_digit(radix) {
-            digits.push(self.reader.peek());
+        while self.reader.peek().is_digit(radix) || self.reader.peek() == '_' {
+            if self.reader.peek() != '_' {
+                digits.push(self.reader.peek());
+            }
+
             if !self.reader.consume() {
                 break;
             }
