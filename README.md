@@ -209,7 +209,15 @@ Native functions can be called through the NATIVE `1D` instruction. The native f
 
 * `00`  
 Print  
-Accepts two arguments: 64-bit length `L` and a reference `R`, in that order (pushed to the stack according to the calling convention). Reads `L` bytes from the memory region `R` points to, interprets them as a UTF-8 text string, and prints them to stdout.
+Accepts two arguments: 64-bit length `L` and a reference `R`, pushed to the stack according to the calling convention. Reads `L` bytes from the memory region `R` points to, interprets them as a UTF-8 text string, and prints them to stdout.
+
+* `01`  
+Random  
+Generates a random number between 0 and 0xFFFFFFFFFFFFFFFF and stores it in R0.
+
+* `02`  
+Sleep  
+Takes a 64-bit number of milliseconds as an argument and sleeps for that amount.
 
 ## Calling convention
 Arguments are pushed to the stack in reverse order and cleaned up by the caller. 

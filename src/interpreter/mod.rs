@@ -1,11 +1,14 @@
 use crate::core::{Error, IWord, Result, UWord, VoidResult, REGISTER_NUM, WORD_BYTE_SIZE};
 use crate::opcodes::{Instruction, Opcode, Operand};
 use memory::{Memory, MemoryReader};
+use rand::prelude::*;
 use std::fmt::{Display, Formatter, LowerHex, UpperHex};
 use std::io::{self, Read};
 use std::net::Shutdown::Write;
 use std::num::Wrapping;
 use std::ops::{Add, BitAnd, BitOr, BitXor, Div, Mul, Not, Shl, Shr, Sub};
+use std::thread;
+use std::time::Duration;
 
 mod memory;
 
@@ -386,6 +389,8 @@ impl Interpreter {
                 self.ensure_operands(&opcode, 1)?;
                 match self.read(&opcode.operands[0])?.value {
                     0 => self.native_print()?,
+                    1 => self.native_random()?,
+                    2 => self.native_sleep()?,
                     _ => unimplemented!(),
                 }
             }
@@ -579,6 +584,20 @@ impl Interpreter {
         let string = String::from_utf8_lossy(utf8_data);
         println!("{}", string);
 
+        Ok(())
+    }
+
+    fn native_random(&mut self) -> VoidResult {
+        self.cpu_state.registers[0] = DataWord {
+            value: rand::random(),
+            is_reference: false,
+        };
+        Ok(())
+    }
+
+    fn native_sleep(&self) -> VoidResult {
+        let millis = self.read_native_parameter(0)?.value;
+        thread::sleep(Duration::from_millis(millis));
         Ok(())
     }
 }
