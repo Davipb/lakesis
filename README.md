@@ -1,6 +1,22 @@
 # Lakesis
-A garbage-collected runtime running in a minimal but flexible VM architecture (à la JVM and CLR).
-This is a personal learning experiment and creating a full finished product is not its goal. Do not use this in production.
+⚠ Work in Progress ⚠
+
+A programming language runtime following in the footsteps of the Java Virtual Machine with its own bytecode, 
+dynamic memory allocation, and garbage collection.
+This is a personal learning experiment and creating a production-ready language is not its goal.
+
+## Roadmap
+- [x] Bytecode encoding and decoding
+- [x] Assembler to write bytecode in a more human-friendly way
+- [x] Bytecode interpreter
+- [x] Simple memory allocation (without GC)
+- [ ] Virtual/physical address translation
+- [ ] Simple mark/sweep garbage collection
+- [ ] Mark/sweep/compact garbage collection
+
+## Work in progress warning
+As Lakesis is a work in progress, the sections below may not reflect the current state of the project.
+Consider them a living architectural document rather than documentation.
 
 ## Architecture
 * Byte-addressable with 64-bit (8 byte) words
@@ -17,7 +33,7 @@ Registers and memory locations are said to be *marked as a reference* or *marked
 
 At boot, every register and memory location is marked as regular data by default.
 When a new memory region is allocated with NEW, the register or memory location that receives its address is marked as a reference.
-Arithmetical and bitwise operations such as ADD and AND between two references or a reference and regular data result in a reference.
+Arithmetic and bitwise operations such as ADD and AND between two references or a reference and regular data result in a reference.
 Copy instructions such as MOV, PUSH, and POP preserve the data type of the source.
 
 In case this automatic tracking fails, the REF and UNREF instructions can be used to manually mark a register or memory location as containing a reference or data.
@@ -35,10 +51,11 @@ Instructions are encoded as a single byte.
 The two most significant bits of the byte indicate how many operands that instruction expects, from 0 `00` to 2 `10` -- the value 3 `11` is reserved and shouldn't be used.
 The remaining lower bits identify the instruction itself.
 
-First line contains the assembly mnemonic of the instruction,
-second line contains the value of the instruction in hexadecimal after masking out the top two bits,
-third line contains a description of the instruction.
-All values following the mnemonic or non-numeric bytes in the opcode are operands (view section below on all available operands).
+In the list below, the first line contains the assembly mnemonic of the instruction,
+the second line contains the value of the instruction in hexadecimal after masking out the top two bits,
+and the third line contains a description of the instruction.
+All values following the mnemonic or non-numeric bytes in the opcode are operands 
+(check the section below for an overview of all available operands and addressing modes).
 
 #### Special
 * NOP  
@@ -174,6 +191,11 @@ Where:
 * `s` = Sign of the operand value; 0 = positive, 1 = negative
 * `n` = Number of bytes used by the operand value 
 * The operand value `v` is encoded as little-endian in the `n` bytes that follow the operand, using the sign `s`.
+
+A sign bit/magnitude model was chosen instead of the usual two's complement to reduce the space taken by common negative
+values such as -1. 
+While this means that negative zero is technically allowed in operands, the assembler will never generate a negative
+zero and the interpreter will decode it as a regular zero.
 
 The available addressing modes are:
 * `00`  

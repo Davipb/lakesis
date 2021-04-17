@@ -1,3 +1,4 @@
+;; Simple test of the 'random' native function
 
 main:
     native 1

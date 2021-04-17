@@ -1,3 +1,4 @@
+;; Simple test of the 'print' native function
 
 push 0
 call print_num

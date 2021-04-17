@@ -1,6 +1,8 @@
 ;; Kitchen Sink
-; This file uses all available instructions
+; This file uses all available instructions and assembler features
 
+; .define: Simple compile-time constant definition. Can only be used to define numbers.
+; The defined label can be used anywhere a regular label can be used
 .define COMPILE_TIME_CONSTANT 1337
 
 ; Simple stuff
@@ -21,6 +23,9 @@ shr r0, r0
 cmp r0, r0
 
 ; Number bases and multipliers
+; 0x?? = Hexadecimal
+; 0b?? = Binary
+; ??w = Word-size, value is multiplied by 8
 mov 1, r0
 mov -1, r0
 mov 0xA, r0
@@ -64,5 +69,8 @@ halt
 
 subroutine: ret
 
+; .align: fills the assembled binary with zeroes until the current address is a multiple of the specified value
 .align 1w
+; .string: Writes the specified string as UTF-8 directly to the assembled binary at the current address
+; If a label is specified before the string, the string's size in bytes is stored in that label.
 string: .string string_len "Hello\n\"Beautiful\"\n\\world\\!"
