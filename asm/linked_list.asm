@@ -1,5 +1,5 @@
 ;; Linked List program
-; Inteded to provide a 'closer to real-world' use case
+; Intended to provide a 'closer to real-world' use case
 ; Creates a linked list of numbers that is always in ascending order
 ; Continuously generates random numbers and inserts them into the list or removes them if they're already there
 ; If there are no more items in the list, halts the program

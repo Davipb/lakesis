@@ -5,6 +5,8 @@ A programming language runtime following in the footsteps of the Java Virtual Ma
 dynamic memory allocation, and garbage collection.
 This is a personal learning experiment and creating a production-ready language is not its goal.
 
+Check out some examples of what the runtime can already do at the [/asm directory](/asm)!
+
 ## Roadmap
 - [x] Bytecode encoding and decoding
 - [x] Assembler to write bytecode in a more human-friendly way
@@ -13,6 +15,32 @@ This is a personal learning experiment and creating a production-ready language 
 - [ ] Virtual/physical address translation
 - [ ] Simple mark/sweep garbage collection
 - [ ] Mark/sweep/compact garbage collection
+
+## Usage
+The documentation below uses `cargo run` to compile and execute the runtime directly from cargo,
+but it works the same if you're using a compiled version 
+(just replace `cargon run` with the name of the executable)
+
+* `cargo run help`  
+  Prints this usage help
+  
+* `cargo run asm <source> [output]`  
+  Compiles an assembly source code file to an executable
+  * `source`: Path of the file containing the assembly source code
+  * `output`: Path of the file where the executable will be written to. If not specified, uses the same file as 'source' but with a .bin extension
+
+* `cargo run view <file>`  
+  Disassembles an executable and displays its code
+  * `file`: Path of the file to disassemble
+  
+* `cargo run run <file>`    
+  Runs a compiled executable
+  * `file`: Path of the executable to run
+  
+* `cargo run runasm <file>`  
+  Compiles an assembly source file and immediately runs it
+  * `file`: Path of the assembly source code to compile and run
+
 
 ## Work in progress warning
 As Lakesis is a work in progress, the sections below may not reflect the current state of the project.
