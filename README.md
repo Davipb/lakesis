@@ -47,6 +47,12 @@ Does nothing
 * NATIVE num  
 `1C num`  
 Calls the native function identified by `num`. For a list of available native functions, check the section below.
+* DEBUGMEM addr len  
+`3D addr len`  
+Dumps `len` bytes of memory starting at `addr` to the console for debugging purposes
+* DEBUGCPU num  
+`3E num`  
+Dumps the entire state of the CPU to the console along with an arbitrary number for debugging purposes
 * HALT  
 `3F`  
 Stops program execution
@@ -205,7 +211,7 @@ Stack reference
     `PUSH [SP+8]`
 
 ## Native functions
-Native functions can be called through the NATIVE `1D` instruction. The native functions are:
+Native functions can be called through the NATIVE `1C` instruction. The native functions are:
 
 * `00`  
 Print  
@@ -215,7 +221,7 @@ using the extra arguments to fill in formatter placeholders found in the text  b
 The placeholders are:
   * `%u` Unsigned integer
   * `%d` Signed integer
-  * `%s` UTF-8 string. Must supply two arguments: string reference and string length, in that order
+  * `%s` UTF-8 string. Must supply two arguments: string length and string reference, in that order
   * `%%` Literal percent-sign character
 
 * `01`  

@@ -48,8 +48,8 @@ print_str:
     ref r0
     ref r2
 
-    push r1
     push r0
+    push r1
     push r2
     push fmt_str_len
     native 0

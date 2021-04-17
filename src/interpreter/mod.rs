@@ -394,6 +394,34 @@ impl Interpreter {
                 }
             }
 
+            Instruction::DebugCpu => {
+                self.ensure_operands(&opcode, 1)?;
+                let num = self.read(&opcode.operands[0])?;
+
+                println!("DEBUGCPU | {} | {}", num, self);
+            }
+
+            Instruction::DebugMemory => {
+                self.ensure_operands(&opcode, 2)?;
+                let addr = self.read(&opcode.operands[0])?.value;
+                let len = self.read(&opcode.operands[1])?.value;
+                let data = self.memory.get(addr, len)?;
+
+                print!("DEBUGMEM | 0x{:X} | ", addr);
+
+                let mut i = 0;
+                for byte in data {
+                    i += 1;
+                    print!("{:02X} ", byte);
+
+                    if i % WORD_BYTE_SIZE == 0 {
+                        print!("  ");
+                    }
+                }
+
+                println!()
+            }
+
             Instruction::Halt => return Ok(false),
         };
 
@@ -598,9 +626,9 @@ impl Interpreter {
 
                     print!("{}", param);
                 } else if string[i] == b's' {
-                    let param = self.read_native_parameter(param_index)?;
-                    param_index += 1;
                     let param_len = self.read_native_parameter(param_index)?.value;
+                    param_index += 1;
+                    let param = self.read_native_parameter(param_index)?;
                     param_index += 1;
 
                     if !param.is_reference {
