@@ -209,7 +209,14 @@ Native functions can be called through the NATIVE `1D` instruction. The native f
 
 * `00`  
 Print  
-Accepts two arguments: 64-bit length `L` and a reference `R`, pushed to the stack according to the calling convention. Reads `L` bytes from the memory region `R` points to, interprets them as a UTF-8 text string, and prints them to stdout.
+Accepts a 64-bit length `L`, a reference `R`, and a variable number of extra arguments.
+Reads `L` bytes from the memory region `R` points to and interprets them as an ASCII format string,
+using the extra arguments to fill in formatter placeholders found in the text  before printing the string to stdout. 
+The placeholders are:
+  * `%u` Unsigned integer
+  * `%d` Signed integer
+  * `%s` UTF-8 string. Must supply two arguments: string reference and string length, in that order
+  * `%%` Literal percent-sign character
 
 * `01`  
 Random  

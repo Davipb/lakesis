@@ -1,10 +1,9 @@
 use crate::core::{Error, IWord, Result, UWord, VoidResult, REGISTER_NUM, WORD_BYTE_SIZE};
 use crate::opcodes::{Instruction, Opcode, Operand};
-use memory::{Memory, MemoryReader};
+use memory::Memory;
 use rand::prelude::*;
-use std::fmt::{Display, Formatter, LowerHex, UpperHex};
+use std::fmt::{Display, Formatter, UpperHex};
 use std::io::{self, Read};
-use std::net::Shutdown::Write;
 use std::num::Wrapping;
 use std::ops::{Add, BitAnd, BitOr, BitXor, Div, Mul, Not, Shl, Shr, Sub};
 use std::thread;
@@ -265,7 +264,7 @@ impl Interpreter {
     fn step(&mut self) -> Result<bool> {
         let previous_ip = self.cpu_state.instruction_pointer;
         let opcode = Opcode::decode(&mut self.ip_reader())?;
-        println!("LAKESIS | {:016X} {}", previous_ip, opcode);
+        //println!("LAKESIS | {:016X} {}", previous_ip, opcode);
 
         match opcode.instruction {
             Instruction::NoOperation => {}
@@ -542,10 +541,7 @@ impl Interpreter {
     }
 
     fn push_stack(&mut self, value: DataWord) -> VoidResult {
-        println!(
-            "LAKESIS | Push@{:X}: {:X}",
-            self.cpu_state.stack_pointer, value
-        );
+        //println!("LAKESIS | Push@{:X}: {:X}", self.cpu_state.stack_pointer, value);
 
         self.memory
             .set_data_word(self.cpu_state.stack_pointer.0, value)?;
@@ -558,10 +554,7 @@ impl Interpreter {
         self.cpu_state.stack_pointer += Wrapping(WORD_BYTE_SIZE);
         let result = self.memory.get_data_word(self.cpu_state.stack_pointer.0)?;
 
-        println!(
-            "LAKESIS | Pop@{:X}: {:X}",
-            self.cpu_state.stack_pointer, result
-        );
+        //println!("LAKESIS | Pop@{:X}: {:X}", self.cpu_state.stack_pointer, result);
         Ok(result)
     }
 
@@ -580,9 +573,50 @@ impl Interpreter {
             return Err(Error::new("Base address provided isn't a reference"));
         }
 
-        let utf8_data = self.memory.get(string_base_addr.value, string_len.value)?;
-        let string = String::from_utf8_lossy(utf8_data);
-        println!("{}", string);
+        let string = self.memory.get(string_base_addr.value, string_len.value)?;
+
+        let mut i = 0;
+        let mut param_index = 2;
+        while i < string.len() {
+            if string[i] == b'%' {
+                i += 1;
+                if i >= string.len() {
+                    return Err(Error::new("Unterminated format string placeholder"));
+                }
+
+                // TODO: This is ugly
+                if string[i] == b'%' {
+                    print!("%");
+                } else if string[i] == b'd' {
+                    let param = self.read_native_parameter(param_index)?.value as IWord;
+                    param_index += 1;
+
+                    print!("{}", param);
+                } else if string[i] == b'u' {
+                    let param = self.read_native_parameter(param_index)?.value;
+                    param_index += 1;
+
+                    print!("{}", param);
+                } else if string[i] == b's' {
+                    let param = self.read_native_parameter(param_index)?;
+                    param_index += 1;
+                    let param_len = self.read_native_parameter(param_index)?.value;
+                    param_index += 1;
+
+                    if !param.is_reference {
+                        return Err(Error::new("Tried to print a non-reference as a string"));
+                    }
+
+                    let param_utf8 = self.memory.get(param.value, param_len)?;
+                    let param_str = String::from_utf8_lossy(param_utf8);
+                    print!("{}", param_str);
+                }
+            } else {
+                print!("{}", string[i] as char);
+            }
+
+            i += 1;
+        }
 
         Ok(())
     }
@@ -662,10 +696,10 @@ pub fn run(reader: &mut impl Read) -> VoidResult {
     interpreter.cpu_state.stack_pointer =
         Wrapping(stack_base) + Wrapping(STACK_SIZE) - Wrapping(WORD_BYTE_SIZE);
 
-    println!("LAKESIS | {}", interpreter);
+    //println!("LAKESIS | {}", interpreter);
 
     while interpreter.step()? {
-        println!("LAKESIS | {}", interpreter);
+        //println!("LAKESIS | {}", interpreter);
     }
 
     Ok(())
