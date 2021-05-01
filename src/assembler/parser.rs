@@ -208,7 +208,7 @@ impl Parser<'_> {
             return Ok(());
         }
 
-        if let LexerTokenValue::Directive(instruction) = self.peek() {
+        if let LexerTokenValue::Directive(_) = self.peek() {
             return self.parse_directive();
         }
 

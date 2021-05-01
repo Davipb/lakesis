@@ -1,6 +1,6 @@
 use super::parser::{Operand, Token, TokenValue};
-use super::{Error, FilePosition, FileRange, Result, VoidResult};
-use crate::core::{IWord, UWord};
+use super::{Error, FileRange, Result, VoidResult};
+use crate::core::UWord;
 use crate::opcodes::{Instruction, Operand as CoreOperand};
 use std::collections::HashMap;
 use std::io::{Seek, SeekFrom, Write};

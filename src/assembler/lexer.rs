@@ -1,5 +1,5 @@
 use super::{Error, FilePosition, FileRange, Result, VoidResult};
-use crate::core::{IWord, RegisterIndex, UWord, REGISTER_NUM, WORD_BYTE_SIZE};
+use crate::core::{IWord, RegisterIndex, REGISTER_NUM, WORD_BYTE_SIZE};
 use crate::opcodes::Instruction;
 use std::fmt::{Debug, Display, Formatter, Result as FmtResult};
 use std::io::Read;
@@ -389,7 +389,7 @@ impl Lexer {
             self.reader.peek()
         };
 
-        self.reader.consume_or_error();
+        self.reader.consume_or_error()?;
         if self.reader.peek() != '\'' {
             return Err(self.make_error("Unterminated character literal"));
         }

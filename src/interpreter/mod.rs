@@ -1,7 +1,7 @@
 use crate::core::{Error, IWord, Result, UWord, VoidResult, REGISTER_NUM, WORD_BYTE_SIZE};
 use crate::opcodes::{Instruction, Opcode, Operand};
+use bytesize;
 use memory::Memory;
-use rand::prelude::*;
 use std::fmt::{Display, Formatter, UpperHex};
 use std::io::{self, Read};
 use std::num::Wrapping;
@@ -11,7 +11,7 @@ use std::time::Duration;
 
 mod memory;
 
-const STACK_SIZE: UWord = WORD_BYTE_SIZE * 0xFF;
+const STACK_SIZE: UWord = 2 * bytesize::MIB;
 
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct DataValue<T> {
@@ -262,7 +262,7 @@ impl Interpreter {
     }
 
     fn step(&mut self) -> Result<bool> {
-        let previous_ip = self.cpu_state.instruction_pointer;
+        self.cpu_state.instruction_pointer;
         let opcode = Opcode::decode(&mut self.ip_reader())?;
         //println!("LAKESIS | {:016X} {}", previous_ip, opcode);
 
@@ -687,15 +687,15 @@ impl Display for Interpreter {
         write!(f, "SP={:02X} ", self.cpu_state.stack_pointer)?;
 
         if self.cpu_state.carry_flag {
-            write!(f, "C");
+            write!(f, "C")?;
         } else {
-            write!(f, "c");
+            write!(f, "c")?;
         }
 
         if self.cpu_state.zero_flag {
-            write!(f, "Z");
+            write!(f, "Z")?;
         } else {
-            write!(f, "z");
+            write!(f, "z")?;
         }
 
         Ok(())

@@ -2,23 +2,15 @@ use super::DataWord;
 use crate::core::{Error, Result, UWord, VoidResult, MAX_MEMORY_SIZE, WORD_BYTE_SIZE};
 use bitvec::prelude::*;
 use bitvec::ptr::{Const, Mut};
-use bitvec::slice::BitSliceIndex;
 use bytesize::ByteSize;
-use std::alloc;
-use std::alloc::Layout;
 use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
 use std::fmt::{self, Display, Formatter};
+use std::hash::Hash;
 use std::io::{self, Read};
-use std::ops::{Add, Div, Mul, Rem, Sub};
-use std::ptr;
-use std::slice;
+use std::ops::{Add, Div, Mul, Sub};
 
 const VIRTUAL_PAGE_SIZE: UWord = 1024;
-
-type AllocationId = u64;
-type VirtualAddressBlockId = u64;
-type HeapRegionId = u64;
 
 #[derive(Clone, Debug)]
 pub struct Memory {
@@ -107,7 +99,7 @@ impl Memory {
                 .map(data_size, allocation_id, preferred_base)?;
 
         let allocation_id = self.allocations.insert(Allocation {
-            id: 0,
+            id: Default::default(),
             start,
             data_length: data_size as usize,
             is_collectible,
@@ -173,7 +165,7 @@ impl Memory {
         }
 
         for id in collectible {
-            println!("LAKESIS | GC: Deallocating A{:04}", id);
+            println!("LAKESIS | GC: Deallocating {}", id);
             self.deallocate(id)?;
         }
 
@@ -201,9 +193,9 @@ impl Memory {
                 let total_size = data_size + bitfield_len(data_size as usize) as UWord;
                 println!(
                     "LAKESIS | Out of memory - Requested: Data {} ({} bytes) / Total {} ({} bytes)",
-                    ByteSize(data_size),
+                    human_readable_byte_size(data_size),
                     data_size,
-                    ByteSize(total_size),
+                    human_readable_byte_size(total_size),
                     total_size
                 );
                 println!("{}", self);
@@ -381,11 +373,11 @@ impl Display for Allocation {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "A{:04} {} {:08X} {:>10} R{:04} V{:04} {}",
+            "{} {} {:08X} {:>10} {} {} {}",
             self.id,
             if self.is_collectible { " " } else { "!" },
             self.start,
-            ByteSize(self.data_length as u64),
+            human_readable_byte_size(self.data_length as u64),
             self.region,
             self.virtual_block,
             match &self.name {
@@ -483,7 +475,7 @@ impl VirtualAddressMapper {
         let base_addr = self.next_address;
 
         let block_id = self.blocks.insert(VirtualAddressBlock {
-            id: 0,
+            id: Default::default(),
             base: base_addr,
             size,
             allocation,
@@ -574,11 +566,11 @@ impl Display for VirtualAddressBlock {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "V{:04} {:08X} - {:08X} {:>10} A{:04}",
+            "{} {:08X} - {:08X} {:>10} {}",
             self.id,
             self.base,
             self.end(),
-            ByteSize(self.size),
+            human_readable_byte_size(self.size),
             self.allocation
         )
     }
@@ -604,7 +596,7 @@ impl HeapRegions {
         };
 
         let id = regions.map.insert(HeapRegion {
-            id: 0,
+            id: Default::default(),
             state: HeapRegionState::Free,
             base: 0,
             length: size,
@@ -641,12 +633,13 @@ impl HeapRegions {
         let region_id = region.id;
 
         if region.length > total_size {
-            let new_region_id = self.map.insert(HeapRegion {
-                id: 0,
+            let new_region = HeapRegion {
+                id: Default::default(),
                 state: HeapRegionState::Free,
                 base: region.base + total_size,
                 length: region.length - total_size,
-            });
+            };
+            let new_region_id = self.map.insert(new_region);
             self.in_order.insert(index + 1, new_region_id);
         }
 
@@ -798,10 +791,10 @@ impl Display for HeapRegion {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "R{:04} {:08X} {:>10} {}",
+            "{} {:08X} {:>10} {}",
             self.id,
             self.base,
-            ByteSize(self.length as u64),
+            human_readable_byte_size(self.length as u64),
             self.state
         )
     }
@@ -830,70 +823,98 @@ impl Display for HeapRegionState {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             HeapRegionState::Free => write!(f, "Free"),
-            HeapRegionState::Used(id) => write!(f, "A{:04}", *id),
+            HeapRegionState::Used(id) => write!(f, "{}", *id),
         }
     }
 }
 
-trait IdStruct {
-    fn get_id(&self) -> u64;
-    fn set_id(&mut self, id: u64);
-}
+trait IdWrapper: Hash + Eq + Copy + Default {
+    const DISPLAY_PREFIX: &'static str;
+    fn new(x: u64) -> Self;
+    fn value(&self) -> u64;
 
-impl IdStruct for Allocation {
-    fn get_id(&self) -> u64 {
-        self.id
+    fn first() -> Self {
+        Self::new(1)
     }
-    fn set_id(&mut self, id: u64) {
-        self.id = id
-    }
-}
 
-impl IdStruct for VirtualAddressBlock {
-    fn get_id(&self) -> u64 {
-        self.id
-    }
-    fn set_id(&mut self, id: u64) {
-        self.id = id
+    fn next(&self) -> Self {
+        Self::new(self.value() + 1)
     }
 }
 
-impl IdStruct for HeapRegion {
-    fn get_id(&self) -> u64 {
-        self.id
-    }
-    fn set_id(&mut self, id: u64) {
-        self.id = id
-    }
+trait StructWithId {
+    type Id: IdWrapper;
+    fn get_id(&self) -> Self::Id;
+    fn set_id(&mut self, id: Self::Id);
 }
+
+macro_rules! entity_id {
+    ( $entity:ident , $id_wrapper:ident , $prefix:expr ) => {
+        #[derive(Eq, PartialEq, Ord, PartialOrd, Copy, Clone, Default, Debug, Hash)]
+        struct $id_wrapper(u64);
+
+        impl IdWrapper for $id_wrapper {
+            const DISPLAY_PREFIX: &'static str = $prefix;
+
+            fn new(x: u64) -> Self {
+                Self(x)
+            }
+
+            fn value(&self) -> u64 {
+                self.0
+            }
+        }
+
+        impl StructWithId for $entity {
+            type Id = $id_wrapper;
+
+            fn get_id(&self) -> Self::Id {
+                self.id
+            }
+            fn set_id(&mut self, id: Self::Id) {
+                self.id = id
+            }
+        }
+
+        impl Display for $id_wrapper {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "{}{:04}", Self::DISPLAY_PREFIX, self.value())
+            }
+        }
+    };
+}
+
+entity_id!(Allocation, AllocationId, "A");
+entity_id!(VirtualAddressBlock, VirtualAddressBlockId, "V");
+entity_id!(HeapRegion, HeapRegionId, "R");
 
 #[derive(Clone, Debug)]
 struct IdHashMap<T>
 where
-    T: IdStruct,
+    T: StructWithId,
 {
-    next_id: u64,
-    map: HashMap<u64, T>,
+    next_id: T::Id,
+    map: HashMap<T::Id, T>,
 }
 
 impl<T> IdHashMap<T>
 where
-    T: IdStruct,
+    T: StructWithId,
 {
     fn new() -> IdHashMap<T> {
         IdHashMap {
-            next_id: 1,
+            next_id: T::Id::first(),
             map: HashMap::new(),
         }
     }
 
-    fn peek_next_id(&self) -> u64 {
+    fn peek_next_id(&self) -> T::Id {
         self.next_id
     }
 
-    fn insert(&mut self, mut item: T) -> u64 {
+    fn insert(&mut self, mut item: T) -> T::Id {
         let id = self.next_id;
-        self.next_id += 1;
+        self.next_id = self.next_id.next();
 
         item.set_id(id);
         self.map.insert(id, item);
@@ -901,27 +922,27 @@ where
         id
     }
 
-    fn get(&self, id: u64) -> Option<&T> {
+    fn get(&self, id: T::Id) -> Option<&T> {
         self.map.get(&id)
     }
 
-    fn get_mut(&mut self, id: u64) -> Option<&mut T> {
+    fn get_mut(&mut self, id: T::Id) -> Option<&mut T> {
         self.map.get_mut(&id)
     }
 
-    fn remove(&mut self, id: u64) -> Option<T> {
+    fn remove(&mut self, id: T::Id) -> Option<T> {
         self.map.remove(&id)
     }
 
-    fn iter(&self) -> std::collections::hash_map::Values<u64, T> {
+    fn iter(&self) -> std::collections::hash_map::Values<T::Id, T> {
         self.map.values()
     }
 
-    fn id_iter(&self) -> std::collections::hash_map::Keys<u64, T> {
+    fn id_iter(&self) -> std::collections::hash_map::Keys<T::Id, T> {
         self.map.keys()
     }
 
-    fn entry_iter(&self) -> std::collections::hash_map::Iter<u64, T> {
+    fn entry_iter(&self) -> std::collections::hash_map::Iter<T::Id, T> {
         self.map.iter()
     }
 
@@ -932,10 +953,10 @@ where
 
 impl<'a, T> IntoIterator for &'a IdHashMap<T>
 where
-    T: IdStruct,
+    T: StructWithId,
 {
     type Item = &'a T;
-    type IntoIter = std::collections::hash_map::Values<'a, u64, T>;
+    type IntoIter = std::collections::hash_map::Values<'a, T::Id, T>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.iter()
@@ -964,5 +985,9 @@ fn divide_round_up<T>(dividend: T, divisor: T) -> T
 where
     T: Copy + Add<Output = T> + Sub<Output = T> + Div<Output = T> + From<u8>,
 {
-    ((dividend + divisor - 1.into()) / divisor)
+    (dividend + divisor - 1.into()) / divisor
+}
+
+fn human_readable_byte_size(value: impl Into<u64>) -> String {
+    ByteSize(value.into()).to_string_as(true)
 }

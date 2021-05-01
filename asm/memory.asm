@@ -20,5 +20,5 @@ big_loop:
         sub 1, r1
         jne small_loop
 
-    debugmem
+    ;debugmem
     jmp big_loop

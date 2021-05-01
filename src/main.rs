@@ -1,7 +1,7 @@
 use crate::core::{Error, VoidResult};
 use std::env;
 use std::fs::File;
-use std::io::{Cursor, Read, Seek, SeekFrom, Write};
+use std::io::{Cursor, Read, Seek, SeekFrom};
 use std::path::Path;
 
 mod assembler;
