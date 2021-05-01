@@ -6,7 +6,7 @@ use bitvec::slice::BitSliceIndex;
 use bytesize::ByteSize;
 use std::alloc;
 use std::alloc::Layout;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
 use std::fmt::{self, Display, Formatter};
 use std::io::{self, Read};
@@ -26,17 +26,6 @@ pub struct Memory {
     regions: HeapRegions,
     allocations: IdHashMap<Allocation>,
     heap: Vec<u8>,
-}
-
-#[derive(PartialEq, Eq, Clone, Debug)]
-struct Allocation {
-    id: AllocationId,
-    base: usize,
-    length: usize,
-    is_collectible: bool,
-    name: Option<String>,
-    virtual_block: VirtualAddressBlockId,
-    region: HeapRegionId,
 }
 
 impl Memory {
@@ -104,33 +93,134 @@ impl Memory {
     pub fn allocate(
         &mut self,
         data_size: UWord,
-        preferred_base: Option<UWord>,
         is_collectible: bool,
+        gc_roots: &[DataWord],
+        preferred_base: Option<UWord>,
         name: Option<&str>,
     ) -> Result<UWord> {
         let allocation_id = self.allocations.peek_next_id();
 
-        let (base, region_id) = self.regions.allocate(data_size as usize, allocation_id)?;
+        let (start, region_id) = self.try_allocate_region(data_size, allocation_id, gc_roots)?;
 
         let (addr, virtual_block_id) =
             self.virtual_mapper
                 .map(data_size, allocation_id, preferred_base)?;
 
-        self.allocations.insert(Allocation {
+        let allocation_id = self.allocations.insert(Allocation {
             id: 0,
-            base: base,
-            length: data_size as usize,
+            start,
+            data_length: data_size as usize,
             is_collectible,
             name: name.map(ToOwned::to_owned),
             region: region_id,
             virtual_block: virtual_block_id,
         });
 
+        let allocation = self.allocations.get(allocation_id).unwrap();
+
+        for x in &mut self.heap[allocation.bitfield_start()..allocation.bitfield_end()] {
+            *x = 0;
+        }
+
         Ok(addr)
     }
 
-    pub fn force_garbage_collection(&mut self) -> VoidResult {
-        // Not implemented yet
+    pub fn force_garbage_collection(&mut self, gc_roots: &[DataWord]) -> VoidResult {
+        let mut collectible = HashSet::with_capacity(self.allocations.len());
+        let mut visited = HashSet::with_capacity(self.allocations.len());
+        let mut next: Vec<UWord> = gc_roots
+            .iter()
+            .filter(|x| x.is_reference)
+            .map(|x| x.value)
+            .collect();
+
+        for (&id, allocation) in self.allocations.entry_iter() {
+            if allocation.is_collectible {
+                collectible.insert(id);
+            } else {
+                let block = self
+                    .virtual_mapper
+                    .get(allocation.virtual_block)
+                    .expect("Allocation pointed to non-existent virtual memory block");
+
+                next.push(block.base);
+            }
+        }
+
+        while let Some(addr) = next.pop() {
+            let (allocation, _) = match self.addr_to_allocation(addr) {
+                Ok(x) => x,
+                Err(_) => continue,
+            };
+
+            if !visited.insert(allocation.id) {
+                continue;
+            }
+
+            collectible.remove(&allocation.id);
+
+            self.get_bitfield(allocation)
+                .iter_ones()
+                .map(|i| allocation.start + (i * WORD_BYTE_SIZE as usize))
+                .map(|x| {
+                    UWord::from_le_bytes(
+                        self.heap[x..x + WORD_BYTE_SIZE as usize]
+                            .try_into()
+                            .expect("Invalid array size"),
+                    )
+                })
+                .for_each(|x| next.push(x))
+        }
+
+        for id in collectible {
+            println!("LAKESIS | GC: Deallocating A{:04}", id);
+            self.deallocate(id)?;
+        }
+
+        Ok(())
+    }
+
+    fn try_allocate_region(
+        &mut self,
+        data_size: UWord,
+        allocation_id: AllocationId,
+        gc_roots: &[DataWord],
+    ) -> Result<(usize, HeapRegionId)> {
+        match self.regions.allocate(data_size as usize, allocation_id) {
+            HeapRegionAllocationResult::Success { base, id } => return Ok((base, id)),
+            HeapRegionAllocationResult::Error(e) => return Err(e),
+            HeapRegionAllocationResult::OutOfMemory => {}
+        };
+
+        self.force_garbage_collection(gc_roots)?;
+
+        match self.regions.allocate(data_size as usize, allocation_id) {
+            HeapRegionAllocationResult::Success { base, id } => Ok((base, id)),
+            HeapRegionAllocationResult::Error(e) => Err(e),
+            HeapRegionAllocationResult::OutOfMemory => {
+                let total_size = data_size + bitfield_len(data_size as usize) as UWord;
+                println!(
+                    "LAKESIS | Out of memory - Requested: Data {} ({} bytes) / Total {} ({} bytes)",
+                    ByteSize(data_size),
+                    data_size,
+                    ByteSize(total_size),
+                    total_size
+                );
+                println!("{}", self);
+                Err(Error::new("Out of memory"))
+            }
+        }
+    }
+
+    fn deallocate(&mut self, id: AllocationId) -> VoidResult {
+        let allocation = self
+            .allocations
+            .remove(id)
+            .ok_or_else(|| Error::new("Invalid allocation ID"))?;
+
+        self.virtual_mapper.unmap(allocation.virtual_block)?;
+        self.regions.deallocate(allocation.region)?;
+
         Ok(())
     }
 
@@ -153,13 +243,17 @@ impl Memory {
             .get(allocation_id)
             .expect("Virtual address pointed to non-existent allocation");
 
+        if offset >= allocation.data_length {
+            return Err(Error::new("Tried to access unmapped memory"));
+        }
+
         Ok((allocation, offset))
     }
 
     fn addr_to_indices(&self, addr: UWord, size: UWord) -> Result<(usize, usize)> {
         let (allocation, offset) = self.addr_to_allocation(addr)?;
 
-        let readable_len = allocation.length - offset;
+        let readable_len = allocation.data_length - offset;
         if readable_len < size as usize {
             return Err(Error::new(&format!(
                 "Tried to access {} bytes but only {} are available",
@@ -167,7 +261,7 @@ impl Memory {
             )));
         }
 
-        let start = allocation.base + offset;
+        let start = allocation.start + offset;
         let end = start + size as usize;
 
         Ok((start, end))
@@ -193,10 +287,11 @@ impl Memory {
         let (allocation, byte_offset) = self.addr_to_allocation(addr)?;
         let word_offset = byte_offset / WORD_BYTE_SIZE as usize;
 
-        let start = allocation.base + allocation.length;
-        let end = start + bitfield_len(allocation.length);
-
-        Ok((start, end, word_offset))
+        Ok((
+            allocation.bitfield_start(),
+            allocation.bitfield_end(),
+            word_offset,
+        ))
     }
 
     fn addr_to_reference_ptr_mut(&mut self, addr: UWord) -> Result<BitRef<Mut, Lsb0, u8>> {
@@ -218,6 +313,14 @@ impl Memory {
             .get(offset)
             .expect("Unable to read reference bitfield"))
     }
+
+    fn get_bitfield(&self, allocation: &Allocation) -> &BitSlice<Lsb0, u8> {
+        let start = allocation.bitfield_start();
+        let end = allocation.bitfield_end();
+
+        let slice = &self.heap[start..end];
+        slice.view_bits()
+    }
 }
 
 impl Display for Memory {
@@ -225,7 +328,7 @@ impl Display for Memory {
         write!(f, "Allocations:")?;
 
         let mut sorted_allocations: Vec<&Allocation> = self.allocations.iter().collect();
-        sorted_allocations.sort_unstable_by_key(|x| x.base);
+        sorted_allocations.sort_unstable_by_key(|x| x.start);
         for allocation in sorted_allocations {
             write!(f, "\n  {}", allocation)?;
         }
@@ -237,6 +340,43 @@ impl Display for Memory {
     }
 }
 
+#[derive(PartialEq, Eq, Clone, Debug)]
+struct Allocation {
+    id: AllocationId,
+    start: usize,
+    data_length: usize,
+    is_collectible: bool,
+    name: Option<String>,
+    virtual_block: VirtualAddressBlockId,
+    region: HeapRegionId,
+}
+
+impl Allocation {
+    fn data_end(&self) -> usize {
+        self.start + self.data_length
+    }
+
+    fn bitfield_start(&self) -> usize {
+        self.data_end()
+    }
+
+    fn bitfield_len(&self) -> usize {
+        bitfield_len(self.data_length)
+    }
+
+    fn bitfield_end(&self) -> usize {
+        self.bitfield_start() + self.bitfield_len()
+    }
+
+    fn end(&self) -> usize {
+        self.bitfield_end()
+    }
+
+    fn length(&self) -> usize {
+        self.end() - self.start
+    }
+}
+
 impl Display for Allocation {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
@@ -244,8 +384,8 @@ impl Display for Allocation {
             "A{:04} {} {:08X} {:>10} R{:04} V{:04} {}",
             self.id,
             if self.is_collectible { " " } else { "!" },
-            self.base,
-            ByteSize(self.length as u64),
+            self.start,
+            ByteSize(self.data_length as u64),
             self.region,
             self.virtual_block,
             match &self.name {
@@ -253,19 +393,6 @@ impl Display for Allocation {
                 Some(s) => s,
             }
         )
-    }
-}
-
-impl HeapRegionState {
-    fn is_free(&self) -> bool {
-        match self {
-            Self::Free => true,
-            Self::Used(_) => false,
-        }
-    }
-
-    fn is_used(&self) -> bool {
-        !self.is_free()
     }
 }
 
@@ -362,9 +489,9 @@ impl VirtualAddressMapper {
             allocation,
         });
 
-        for page in 0..=(size / VIRTUAL_PAGE_SIZE) {
+        for (page, addr) in Self::pages_of(base_addr, size) {
             self.mappings.insert(
-                self.next_address,
+                addr,
                 VirtualAddressMapping {
                     block: block_id,
                     offset: page as usize * VIRTUAL_PAGE_SIZE as usize,
@@ -374,6 +501,23 @@ impl VirtualAddressMapper {
         }
 
         Ok((base_addr, block_id))
+    }
+
+    fn unmap(&mut self, id: VirtualAddressBlockId) -> VoidResult {
+        let block = self
+            .blocks
+            .remove(id)
+            .ok_or_else(|| Error::new("Invalid virtual block ID"))?;
+
+        for (_, addr) in Self::pages_of(block.base, block.size) {
+            self.mappings.remove(&addr);
+        }
+
+        Ok(())
+    }
+
+    fn get(&self, id: VirtualAddressBlockId) -> Option<&VirtualAddressBlock> {
+        self.blocks.get(id)
     }
 
     fn translate(&self, addr: UWord) -> Result<(AllocationId, usize)> {
@@ -393,6 +537,16 @@ impl VirtualAddressMapper {
             .expect("Mapping pointed to an invalid block");
 
         Ok((block.allocation, mapping.offset + alignment_offset))
+    }
+
+    fn pages_of(base_addr: UWord, size: UWord) -> Vec<(usize, UWord)> {
+        let mut pages = Vec::with_capacity(size as usize / VIRTUAL_PAGE_SIZE as usize);
+
+        for page in 0..=(size / VIRTUAL_PAGE_SIZE) {
+            pages.push((page as usize, base_addr + page * VIRTUAL_PAGE_SIZE));
+        }
+
+        pages
     }
 }
 
@@ -436,18 +590,10 @@ struct HeapRegions {
     in_order: Vec<HeapRegionId>,
 }
 
-#[derive(PartialEq, Eq, Copy, Clone, Debug)]
-struct HeapRegion {
-    id: HeapRegionId,
-    state: HeapRegionState,
-    base: usize,
-    length: usize,
-}
-
-#[derive(PartialEq, Eq, Copy, Clone, Debug)]
-enum HeapRegionState {
-    Free,
-    Used(AllocationId),
+enum HeapRegionAllocationResult {
+    Success { base: usize, id: HeapRegionId },
+    OutOfMemory,
+    Error(Error),
 }
 
 impl HeapRegions {
@@ -473,10 +619,10 @@ impl HeapRegions {
         &mut self,
         data_size: usize,
         allocation: AllocationId,
-    ) -> Result<(usize, HeapRegionId)> {
+    ) -> HeapRegionAllocationResult {
         let total_size = data_size as usize + bitfield_len(data_size as usize);
 
-        let (index, region) = self
+        let (index, region) = match self
             .in_order
             .iter()
             .map(|id| {
@@ -487,7 +633,10 @@ impl HeapRegions {
             .enumerate()
             .filter(|(_, x)| x.state.is_free())
             .find(|(_, x)| x.length >= total_size)
-            .ok_or_else(|| Error::new("Out of memory"))?;
+        {
+            None => return HeapRegionAllocationResult::OutOfMemory,
+            Some(x) => x,
+        };
 
         let region_id = region.id;
 
@@ -505,7 +654,111 @@ impl HeapRegions {
         region.length = total_size;
         region.state = HeapRegionState::Used(allocation);
 
-        Ok((region.base, region.id))
+        HeapRegionAllocationResult::Success {
+            base: region.base,
+            id: region.id,
+        }
+    }
+
+    fn deallocate(&mut self, id: HeapRegionId) -> VoidResult {
+        let region = self
+            .map
+            .get(id)
+            .ok_or_else(|| Error::new("Invalid region ID"))?;
+
+        let index = self
+            .in_order
+            .iter()
+            .position(|&x| x == region.id)
+            .expect("Heap region wasn't in the order array");
+
+        let has_left = index > 0;
+        let has_right = index < self.in_order.len() - 1;
+
+        // Empty Free Empty
+        if !has_left && !has_right {
+            return self.deallocate_island(id);
+        }
+
+        if !has_left && has_right {
+            let right_id = *self.in_order.get(index + 1).unwrap();
+            let right = self.map.get(right_id).unwrap();
+
+            // Empty Free Used
+            if right.is_used() {
+                return self.deallocate_island(id);
+            }
+
+            // Empty Free Free
+            return self.join_free_right(index);
+        }
+
+        if has_left && !has_right {
+            let left_id = *self.in_order.get(index - 1).unwrap();
+            let left = self.map.get(left_id).unwrap();
+
+            // Used Free Empty
+            if left.is_used() {
+                return self.deallocate_island(id);
+            }
+
+            // Free Free Empty
+            return self.join_free_right(index - 1);
+        }
+
+        let right_id = *self.in_order.get(index + 1).unwrap();
+        let left_id = *self.in_order.get(index - 1).unwrap();
+
+        let right = self.map.get(right_id).unwrap();
+        let left = self.map.get(left_id).unwrap();
+
+        // Used Free Used
+        if left.is_used() && right.is_used() {
+            return self.deallocate_island(id);
+        }
+
+        // Used Free Free
+        if left.is_used() && right.is_free() {
+            return self.join_free_right(index);
+        }
+
+        // Free Free Used
+        if left.is_free() && right.is_used() {
+            return self.join_free_right(index - 1);
+        }
+
+        // Free Free Free
+        self.join_free_right(index - 1)?;
+        self.join_free_right(index - 1)?;
+        Ok(())
+    }
+
+    fn join_free_right(&mut self, left_index: usize) -> VoidResult {
+        assert!(left_index < self.in_order.len() - 1);
+
+        let right_index = left_index + 1;
+
+        let right_id = self.in_order.remove(right_index);
+        let left_id = self.in_order[left_index];
+
+        let right = self.map.remove(right_id).unwrap();
+        let left = self.map.get_mut(left_id).unwrap();
+
+        left.state = HeapRegionState::Free;
+        left.length += right.length;
+
+        Ok(())
+    }
+
+    fn deallocate_island(&mut self, id: HeapRegionId) -> VoidResult {
+        let region = self
+            .map
+            .get_mut(id)
+            .ok_or_else(|| Error::new("Invalid heap region ID"))?;
+
+        region.state = HeapRegionState::Free;
+
+        Ok(())
     }
 }
 
@@ -523,6 +776,24 @@ impl Display for HeapRegions {
     }
 }
 
+#[derive(PartialEq, Eq, Copy, Clone, Debug)]
+struct HeapRegion {
+    id: HeapRegionId,
+    state: HeapRegionState,
+    base: usize,
+    length: usize,
+}
+
+impl HeapRegion {
+    fn is_free(&self) -> bool {
+        self.state.is_free()
+    }
+
+    fn is_used(&self) -> bool {
+        self.state.is_used()
+    }
+}
+
 impl Display for HeapRegion {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(
@@ -533,6 +804,25 @@ impl Display for HeapRegion {
             ByteSize(self.length as u64),
             self.state
         )
+    }
+}
+
+#[derive(PartialEq, Eq, Copy, Clone, Debug)]
+enum HeapRegionState {
+    Free,
+    Used(AllocationId),
+}
+
+impl HeapRegionState {
+    fn is_free(&self) -> bool {
+        match self {
+            Self::Free => true,
+            Self::Used(_) => false,
+        }
+    }
+
+    fn is_used(&self) -> bool {
+        !self.is_free()
     }
 }
 
@@ -619,12 +909,24 @@ where
         self.map.get_mut(&id)
     }
 
-    fn remove(&mut self, id: u64) {
-        self.map.remove(&id);
+    fn remove(&mut self, id: u64) -> Option<T> {
+        self.map.remove(&id)
     }
 
     fn iter(&self) -> std::collections::hash_map::Values<u64, T> {
         self.map.values()
+    }
+
+    fn id_iter(&self) -> std::collections::hash_map::Keys<u64, T> {
+        self.map.keys()
+    }
+
+    fn entry_iter(&self) -> std::collections::hash_map::Iter<u64, T> {
+        self.map.iter()
+    }
+
+    fn len(&self) -> usize {
+        self.map.len()
     }
 }
 
@@ -641,7 +943,7 @@ where
 }
 
 fn bitfield_len(data_len: usize) -> usize {
-    data_len / WORD_BYTE_SIZE as usize / std::mem::size_of::<u8>()
+    divide_round_up(data_len, WORD_BYTE_SIZE as usize * 8)
 }
 
 fn round_down_to<T>(value: T, alignment: T) -> T
@@ -655,5 +957,12 @@ fn round_up_to<T>(value: T, alignment: T) -> T
 where
     T: Copy + Add<Output = T> + Sub<Output = T> + Div<Output = T> + Mul<Output = T> + From<u8>,
 {
-    ((value + alignment - 1.into()) / alignment) * alignment
+    divide_round_up(value, alignment) * alignment
+}
+
+fn divide_round_up<T>(dividend: T, divisor: T) -> T
+where
+    T: Copy + Add<Output = T> + Sub<Output = T> + Div<Output = T> + From<u8>,
+{
+    ((dividend + divisor - 1.into()) / divisor)
 }

@@ -362,13 +362,21 @@ impl Interpreter {
                 let size = self.read(&opcode.operands[0])?.value;
 
                 let addr = DataWord {
-                    value: self.memory.allocate(size, None, true, None)?,
+                    value: self.memory.allocate(
+                        size,
+                        true,
+                        &self.cpu_state.registers,
+                        None,
+                        None,
+                    )?,
                     is_reference: true,
                 };
                 self.write(&opcode.operands[1], addr)?;
             }
 
-            Instruction::GarbageCollector => self.memory.force_garbage_collection()?,
+            Instruction::GarbageCollector => self
+                .memory
+                .force_garbage_collection(&self.cpu_state.registers)?,
 
             Instruction::Reference => {
                 self.ensure_operands(&opcode, 1)?;
@@ -721,7 +729,7 @@ pub fn run(reader: &mut impl Read) -> VoidResult {
 
     if interpreter
         .memory
-        .allocate(aligned_len, Some(0), false, Some("Program"))?
+        .allocate(aligned_len, false, &[], Some(0), Some("Program"))?
         != 0
     {
         return Err(Error::new("Unable to allocate program data at address 0"));
@@ -731,7 +739,7 @@ pub fn run(reader: &mut impl Read) -> VoidResult {
 
     let stack_base = interpreter
         .memory
-        .allocate(STACK_SIZE, None, false, Some("Stack"))?;
+        .allocate(STACK_SIZE, false, &[], None, Some("Stack"))?;
     interpreter.cpu_state.stack_pointer =
         Wrapping(stack_base) + Wrapping(STACK_SIZE) - Wrapping(WORD_BYTE_SIZE);
 

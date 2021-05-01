@@ -13,7 +13,7 @@ Check out some examples of what the runtime can already do at the [/asm director
 - [x] Bytecode interpreter
 - [x] Simple memory allocation (without GC)
 - [X] Virtual/physical address translation
-- [ ] Simple mark/sweep garbage collection
+- [x] Simple mark/sweep garbage collection
 - [ ] Mark/sweep/compact garbage collection
 
 ## Usage
