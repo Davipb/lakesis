@@ -362,7 +362,7 @@ impl Interpreter {
                 let size = self.read(&opcode.operands[0])?.value;
 
                 let addr = DataWord {
-                    value: self.memory.allocate(size, None)?,
+                    value: self.memory.allocate(size, None, true)?,
                     is_reference: true,
                 };
                 self.write(&opcode.operands[1], addr)?;
@@ -714,13 +714,13 @@ pub fn run(reader: &mut impl Read) -> VoidResult {
         aligned_len += 1;
     }
 
-    if interpreter.memory.allocate(aligned_len, Some(0))? != 0 {
+    if interpreter.memory.allocate(aligned_len, Some(0), false)? != 0 {
         return Err(Error::new("Unable to allocate program data at address 0"));
     }
 
     interpreter.memory.set(0, &program_data)?;
 
-    let stack_base = interpreter.memory.allocate(STACK_SIZE, None)?;
+    let stack_base = interpreter.memory.allocate(STACK_SIZE, None, false)?;
     interpreter.cpu_state.stack_pointer =
         Wrapping(stack_base) + Wrapping(STACK_SIZE) - Wrapping(WORD_BYTE_SIZE);
 
