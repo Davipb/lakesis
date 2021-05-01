@@ -1,7 +1,7 @@
 use super::DataWord;
 use crate::core::{Error, Result, UWord, VoidResult, MAX_MEMORY_SIZE, WORD_BYTE_SIZE};
 use bitvec::prelude::*;
-use bitvec::ptr::Mut;
+use bitvec::ptr::{Const, Mut};
 use bitvec::slice::BitSliceIndex;
 use std::alloc;
 use std::alloc::Layout;
@@ -11,7 +11,6 @@ use std::io::{self, Read};
 use std::ops::{Add, Div, Mul, Rem, Sub};
 use std::ptr;
 use std::slice;
-use std::usize::MAX;
 
 const VIRTUAL_PAGE_SIZE: UWord = 1024;
 const HEAP_ALIGN: usize = 1024;
@@ -26,8 +25,7 @@ pub struct Memory {
     regions: HashMap<HeapRegionId, HeapRegion>,
     next_region_id: HeapRegionId,
 
-    heap: *mut u8,
-    heap_size: usize,
+    heap: Vec<u8>,
     blocks: Vec<ContiguousBlock>,
 }
 
@@ -67,10 +65,7 @@ impl Memory {
             regions: HashMap::new(),
             next_region_id: 0,
 
-            heap: unsafe {
-                alloc::alloc(Layout::from_size_align(MAX_MEMORY_SIZE, HEAP_ALIGN).unwrap())
-            },
-            heap_size: MAX_MEMORY_SIZE,
+            heap: vec![0; MAX_MEMORY_SIZE],
             blocks: vec![ContiguousBlock {
                 state: ContiguousBlockState::Free,
                 base: 0,
@@ -84,15 +79,12 @@ impl Memory {
     }
 
     pub fn get(&self, addr: UWord, size: UWord) -> Result<&[u8]> {
-        let ptr = self.addr_to_ptr(addr, size)?;
-
-        unsafe { Ok(slice::from_raw_parts(ptr, size as usize)) }
+        Ok(self.addr_to_slice(addr, size)?)
     }
 
     pub fn set(&mut self, addr: UWord, data: &[u8]) -> VoidResult {
-        let ptr = self.addr_to_ptr(addr, data.len() as UWord)?;
-
-        unsafe { ptr::copy(data.as_ptr(), ptr, data.len()) }
+        let slice = self.addr_to_mut_slice(addr, data.len() as UWord)?;
+        slice.copy_from_slice(data);
 
         Ok(())
     }
@@ -102,7 +94,7 @@ impl Memory {
     }
 
     pub fn set_reference(&mut self, addr: UWord, is_reference: bool) -> VoidResult {
-        *self.addr_to_reference_ptr(addr)? = is_reference;
+        *self.addr_to_reference_ptr_mut(addr)? = is_reference;
         Ok(())
     }
 
@@ -247,7 +239,7 @@ impl Memory {
         Ok((region, mapping.offset + alignment_offset))
     }
 
-    fn addr_to_ptr(&self, addr: UWord, size: UWord) -> Result<*mut u8> {
+    fn addr_to_indices(&self, addr: UWord, size: UWord) -> Result<(usize, usize)> {
         let (region, offset) = self.addr_to_region(addr)?;
 
         let readable_len = region.length - offset;
@@ -258,47 +250,60 @@ impl Memory {
             )));
         }
 
-        unsafe { Ok(self.heap.add(region.base).add(offset)) }
+        let start = region.base + offset;
+        let end = start + size as usize;
+
+        Ok((start, end))
     }
 
-    fn addr_to_reference_ptr(&self, addr: UWord) -> Result<BitRef<Mut, Lsb0, u8>> {
+    fn addr_to_slice(&self, addr: UWord, size: UWord) -> Result<&[u8]> {
+        let (start, end) = self.addr_to_indices(addr, size)?;
+
+        Ok(&self.heap[start..end])
+    }
+
+    fn addr_to_mut_slice(&mut self, addr: UWord, size: UWord) -> Result<&mut [u8]> {
+        let (start, end) = self.addr_to_indices(addr, size)?;
+
+        Ok(&mut self.heap[start..end])
+    }
+
+    fn addr_to_reference_indices(&self, addr: UWord) -> Result<(usize, usize, usize)> {
         if addr % WORD_BYTE_SIZE != 0 {
             return Err(Error::new("Address isn't byte-aligned"));
         }
 
-        let (region, offset) = self.addr_to_region(addr)?;
-        let word_offset = offset / WORD_BYTE_SIZE as usize;
+        let (region, byte_offset) = self.addr_to_region(addr)?;
+        let word_offset = byte_offset / WORD_BYTE_SIZE as usize;
 
-        let bitfield_len = Self::bitfield_len(region.length);
-        let bitfield_slice = unsafe {
-            let start = self.heap.add(region.base).add(region.length);
-            slice::from_raw_parts_mut(start, bitfield_len)
-        };
+        let start = region.base + region.length;
+        let end = start + Self::bitfield_len(region.length);
 
-        let bitfield = bitfield_slice.view_bits_mut();
+        Ok((start, end, word_offset))
+    }
+
+    fn addr_to_reference_ptr_mut(&mut self, addr: UWord) -> Result<BitRef<Mut, Lsb0, u8>> {
+        let (start, end, offset) = self.addr_to_reference_indices(addr)?;
+
+        let slice = &mut self.heap[start..end];
+        let bitfield = slice.view_bits_mut();
         Ok(bitfield
-            .get_mut(word_offset)
+            .get_mut(offset)
+            .expect("Unable to read reference bitfield"))
+    }
+
+    fn addr_to_reference_ptr(&self, addr: UWord) -> Result<BitRef<Const, Lsb0, u8>> {
+        let (start, end, offset) = self.addr_to_reference_indices(addr)?;
+
+        let slice = &self.heap[start..end];
+        let bitfield = slice.view_bits();
+        Ok(bitfield
+            .get(offset)
             .expect("Unable to read reference bitfield"))
     }
 
     fn bitfield_len(region_len: usize) -> usize {
         region_len / WORD_BYTE_SIZE as usize / std::mem::size_of::<u8>()
-    }
-}
-
-impl Drop for Memory {
-    fn drop(&mut self) {
-        if self.heap.is_null() || self.heap_size == 0 {
-            return;
-        }
-
-        unsafe {
-            alloc::dealloc(
-                self.heap,
-                Layout::from_size_align(self.heap_size, HEAP_ALIGN)
-                    .expect("Invalid layout when dealloc'ing heap"),
-            )
-        }
     }
 }
 
