@@ -49,7 +49,8 @@ pub enum Instruction {
     Reference = 0x1A,
     Unreference = 0x1B,
     CallNative = 0x1C,
-    DebugMemory = 0x3D,
+    DebugMemory = 0x3C,
+    DebugDump = 0x3D,
     DebugCpu = 0x3E,
     Halt = 0x3F,
 }
@@ -478,10 +479,18 @@ impl InstructionRepository {
             },
         );
         descriptors.insert(
+            Instruction::DebugDump,
+            InstructionDescriptor {
+                mnemonic: "debugdump",
+                operands: &[OperandMode::ReadOnly, OperandMode::ReadOnly],
+                is_jump: false,
+            },
+        );
+        descriptors.insert(
             Instruction::DebugMemory,
             InstructionDescriptor {
                 mnemonic: "debugmem",
-                operands: &[OperandMode::ReadOnly, OperandMode::ReadOnly],
+                operands: &[],
                 is_jump: false,
             },
         );

@@ -3,74 +3,49 @@ use crate::core::{Error, Result, UWord, VoidResult, MAX_MEMORY_SIZE, WORD_BYTE_S
 use bitvec::prelude::*;
 use bitvec::ptr::{Const, Mut};
 use bitvec::slice::BitSliceIndex;
+use bytesize::ByteSize;
 use std::alloc;
 use std::alloc::Layout;
 use std::collections::HashMap;
 use std::convert::TryInto;
+use std::fmt::{self, Display, Formatter};
 use std::io::{self, Read};
 use std::ops::{Add, Div, Mul, Rem, Sub};
 use std::ptr;
 use std::slice;
 
 const VIRTUAL_PAGE_SIZE: UWord = 1024;
-const HEAP_ALIGN: usize = 1024;
 
+type AllocationId = u64;
+type VirtualAddressBlockId = u64;
 type HeapRegionId = u64;
 
 #[derive(Clone, Debug)]
 pub struct Memory {
-    virtual_addresses: HashMap<UWord, VirtualAddressMapping>,
-    next_virtual_address: UWord,
-
-    regions: HashMap<HeapRegionId, HeapRegion>,
-    next_region_id: HeapRegionId,
-
+    virtual_mapper: VirtualAddressMapper,
+    regions: HeapRegions,
+    allocations: IdHashMap<Allocation>,
     heap: Vec<u8>,
-    blocks: Vec<ContiguousBlock>,
 }
 
-#[derive(PartialEq, Eq, Copy, Clone, Debug)]
-struct VirtualAddressMapping {
-    region: HeapRegionId,
-    offset: usize,
-}
-
-#[derive(PartialEq, Eq, Copy, Clone, Debug)]
-struct HeapRegion {
-    id: HeapRegionId,
+#[derive(PartialEq, Eq, Clone, Debug)]
+struct Allocation {
+    id: AllocationId,
     base: usize,
     length: usize,
     is_collectible: bool,
-}
-
-#[derive(PartialEq, Eq, Copy, Clone, Debug)]
-struct ContiguousBlock {
-    state: ContiguousBlockState,
-    base: usize,
-    length: usize,
-}
-
-#[derive(PartialEq, Eq, Copy, Clone, Debug)]
-enum ContiguousBlockState {
-    Free,
-    Used(HeapRegionId),
+    name: Option<String>,
+    virtual_block: VirtualAddressBlockId,
+    region: HeapRegionId,
 }
 
 impl Memory {
     pub fn new() -> Memory {
         Memory {
-            virtual_addresses: HashMap::new(),
-            next_virtual_address: 0,
-
-            regions: HashMap::new(),
-            next_region_id: 0,
-
+            virtual_mapper: VirtualAddressMapper::new(),
+            allocations: IdHashMap::new(),
+            regions: HeapRegions::new(MAX_MEMORY_SIZE),
             heap: vec![0; MAX_MEMORY_SIZE],
-            blocks: vec![ContiguousBlock {
-                state: ContiguousBlockState::Free,
-                base: 0,
-                length: MAX_MEMORY_SIZE,
-            }],
         }
     }
 
@@ -131,77 +106,27 @@ impl Memory {
         data_size: UWord,
         preferred_base: Option<UWord>,
         is_collectible: bool,
+        name: Option<&str>,
     ) -> Result<UWord> {
-        if let Some(base) = preferred_base {
-            if base % VIRTUAL_PAGE_SIZE != 0 {
-                return Err(Error::new(&format!(
-                    "Requested base address {:08X} isn't page-aligned",
-                    base
-                )));
-            }
+        let allocation_id = self.allocations.peek_next_id();
 
-            if base < self.next_virtual_address {
-                return Err(Error::new(&format!(
-                    "Unable to meet requested base address {:08X}",
-                    base
-                )));
-            }
+        let (base, region_id) = self.regions.allocate(data_size as usize, allocation_id)?;
 
-            self.next_virtual_address = base;
-        }
+        let (addr, virtual_block_id) =
+            self.virtual_mapper
+                .map(data_size, allocation_id, preferred_base)?;
 
-        let total_size = data_size as usize + Self::bitfield_len(data_size as usize);
+        self.allocations.insert(Allocation {
+            id: 0,
+            base: base,
+            length: data_size as usize,
+            is_collectible,
+            name: name.map(ToOwned::to_owned),
+            region: region_id,
+            virtual_block: virtual_block_id,
+        });
 
-        let result = self
-            .blocks
-            .iter_mut()
-            .enumerate()
-            .filter(|(_, b)| b.state.is_free())
-            .find(|(_, b)| b.length >= total_size);
-
-        let (index, block) = match result {
-            None => return Err(Error::new("Out of memory")),
-            Some(x) => x,
-        };
-
-        self.regions.insert(
-            self.next_region_id,
-            HeapRegion {
-                id: self.next_region_id,
-                base: block.base,
-                length: data_size as usize,
-                is_collectible,
-            },
-        );
-        let region_id = self.next_region_id;
-        self.next_region_id += 1;
-
-        block.state = ContiguousBlockState::Used(region_id);
-
-        if block.length > total_size {
-            let new_block = ContiguousBlock {
-                state: ContiguousBlockState::Free,
-                base: block.base + total_size,
-                length: block.length - total_size,
-            };
-            block.length = total_size;
-            self.blocks.insert(index + 1, new_block);
-        }
-
-        let base_addr = self.next_virtual_address;
-
-        for page in 0..=(data_size / VIRTUAL_PAGE_SIZE) {
-            self.virtual_addresses.insert(
-                self.next_virtual_address,
-                VirtualAddressMapping {
-                    region: region_id,
-                    offset: page as usize * VIRTUAL_PAGE_SIZE as usize,
-                },
-            );
-            self.next_virtual_address += VIRTUAL_PAGE_SIZE;
-        }
-
-        Ok(base_addr)
+        Ok(addr)
     }
 
     pub fn force_garbage_collection(&mut self) -> VoidResult {
@@ -220,29 +145,21 @@ impl Memory {
         }
     }
 
-    fn addr_to_region(&self, addr: UWord) -> Result<(&HeapRegion, usize)> {
-        let aligned_addr = round_down_to(addr, VIRTUAL_PAGE_SIZE);
-        let alignment_offset = addr as usize - aligned_addr as usize;
+    fn addr_to_allocation(&self, addr: UWord) -> Result<(&Allocation, usize)> {
+        let (allocation_id, offset) = self.virtual_mapper.translate(addr)?;
 
-        let mapping = self.virtual_addresses.get(&aligned_addr).ok_or_else(|| {
-            Error::new(&format!(
-                "Tried to access unmapped memory address {:08X}",
-                addr
-            ))
-        })?;
+        let allocation = self
+            .allocations
+            .get(allocation_id)
+            .expect("Virtual address pointed to non-existent allocation");
 
-        let region = self
-            .regions
-            .get(&mapping.region)
-            .ok_or_else(|| Error::new(&format!("Heap region {} doesn't exist", mapping.region)))?;
-
-        Ok((region, mapping.offset + alignment_offset))
+        Ok((allocation, offset))
     }
 
     fn addr_to_indices(&self, addr: UWord, size: UWord) -> Result<(usize, usize)> {
-        let (region, offset) = self.addr_to_region(addr)?;
+        let (allocation, offset) = self.addr_to_allocation(addr)?;
 
-        let readable_len = region.length - offset;
+        let readable_len = allocation.length - offset;
         if readable_len < size as usize {
             return Err(Error::new(&format!(
                 "Tried to access {} bytes but only {} are available",
@@ -250,7 +167,7 @@ impl Memory {
             )));
         }
 
-        let start = region.base + offset;
+        let start = allocation.base + offset;
         let end = start + size as usize;
 
         Ok((start, end))
@@ -273,11 +190,11 @@ impl Memory {
             return Err(Error::new("Address isn't byte-aligned"));
         }
 
-        let (region, byte_offset) = self.addr_to_region(addr)?;
+        let (allocation, byte_offset) = self.addr_to_allocation(addr)?;
         let word_offset = byte_offset / WORD_BYTE_SIZE as usize;
 
-        let start = region.base + region.length;
-        let end = start + Self::bitfield_len(region.length);
+        let start = allocation.base + allocation.length;
+        let end = start + bitfield_len(allocation.length);
 
         Ok((start, end, word_offset))
     }
@@ -301,13 +218,45 @@ impl Memory {
             .get(offset)
             .expect("Unable to read reference bitfield"))
     }
+}
 
-    fn bitfield_len(region_len: usize) -> usize {
-        region_len / WORD_BYTE_SIZE as usize / std::mem::size_of::<u8>()
+impl Display for Memory {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "Allocations:")?;
+
+        let mut sorted_allocations: Vec<&Allocation> = self.allocations.iter().collect();
+        sorted_allocations.sort_unstable_by_key(|x| x.base);
+        for allocation in sorted_allocations {
+            write!(f, "\n  {}", allocation)?;
+        }
+
+        write!(f, "\n{}", self.virtual_mapper)?;
+        write!(f, "\n{}", self.regions)?;
+
+        Ok(())
     }
 }
 
-impl ContiguousBlockState {
+impl Display for Allocation {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "A{:04} {} {:08X} {:>10} R{:04} V{:04} {}",
+            self.id,
+            if self.is_collectible { " " } else { "!" },
+            self.base,
+            ByteSize(self.length as u64),
+            self.region,
+            self.virtual_block,
+            match &self.name {
+                None => "",
+                Some(s) => s,
+            }
+        )
+    }
+}
+
+impl HeapRegionState {
     fn is_free(&self) -> bool {
         match self {
             Self::Free => true,
@@ -342,15 +291,357 @@ impl MemoryReader<'_> {
 
 impl Read for MemoryReader<'_> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let mut i = 0;
-        for &byte in self.memory.get(self.addr, buf.len() as UWord)? {
-            buf[i] = byte;
-            self.addr += 1;
-            i += 1;
-        }
+        let read = self.memory.get(self.addr, buf.len() as UWord)?;
+        buf.copy_from_slice(read);
 
+        self.addr += buf.len() as UWord;
         Ok(buf.len())
     }
+}
+
+#[derive(PartialEq, Eq, Copy, Clone, Debug)]
+struct VirtualAddressMapping {
+    block: VirtualAddressBlockId,
+    offset: usize,
+}
+
+#[derive(PartialEq, Eq, Copy, Clone, Debug)]
+struct VirtualAddressBlock {
+    id: VirtualAddressBlockId,
+    allocation: AllocationId,
+    base: UWord,
+    size: UWord,
+}
+
+#[derive(Clone, Debug)]
+struct VirtualAddressMapper {
+    blocks: IdHashMap<VirtualAddressBlock>,
+    mappings: HashMap<UWord, VirtualAddressMapping>,
+    next_address: UWord,
+}
+
+impl VirtualAddressMapper {
+    fn new() -> VirtualAddressMapper {
+        VirtualAddressMapper {
+            blocks: IdHashMap::new(),
+            mappings: HashMap::new(),
+            next_address: 0,
+        }
+    }
+
+    fn map(
+        &mut self,
+        size: UWord,
+        allocation: AllocationId,
+        preferred_base: Option<UWord>,
+    ) -> Result<(UWord, VirtualAddressBlockId)> {
+        if let Some(base) = preferred_base {
+            if base % VIRTUAL_PAGE_SIZE != 0 {
+                return Err(Error::new(&format!(
+                    "Requested base address {:08X} isn't page-aligned",
+                    base
+                )));
+            }
+
+            if base < self.next_address {
+                return Err(Error::new(&format!(
+                    "Unable to meet requested base address {:08X}",
+                    base
+                )));
+            }
+
+            self.next_address = base;
+        }
+
+        let base_addr = self.next_address;
+
+        let block_id = self.blocks.insert(VirtualAddressBlock {
+            id: 0,
+            base: base_addr,
+            size,
+            allocation,
+        });
+
+        for page in 0..=(size / VIRTUAL_PAGE_SIZE) {
+            self.mappings.insert(
+                self.next_address,
+                VirtualAddressMapping {
+                    block: block_id,
+                    offset: page as usize * VIRTUAL_PAGE_SIZE as usize,
+                },
+            );
+            self.next_address += VIRTUAL_PAGE_SIZE;
+        }
+
+        Ok((base_addr, block_id))
+    }
+
+    fn translate(&self, addr: UWord) -> Result<(AllocationId, usize)> {
+        let aligned_addr = round_down_to(addr, VIRTUAL_PAGE_SIZE);
+        let alignment_offset = addr as usize - aligned_addr as usize;
+
+        let mapping = self.mappings.get(&aligned_addr).ok_or_else(|| {
+            Error::new(&format!(
+                "Tried to access unmapped memory address {:08X}",
+                addr
+            ))
+        })?;
+
+        let block = self
+            .blocks
+            .get(mapping.block)
+            .expect("Mapping pointed to an invalid block");
+
+        Ok((block.allocation, mapping.offset + alignment_offset))
+    }
+}
+
+impl VirtualAddressBlock {
+    fn end(&self) -> UWord {
+        self.base + self.size
+    }
+}
+
+impl Display for VirtualAddressMapper {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let mut sorted_blocks: Vec<&VirtualAddressBlock> = self.blocks.iter().collect();
+        sorted_blocks.sort_unstable_by_key(|x| x.base);
+
+        write!(f, "Virtual Address Blocks")?;
+        for block in sorted_blocks {
+            write!(f, "\n  {}", block)?;
+        }
+
+        Ok(())
+    }
+}
+
+impl Display for VirtualAddressBlock {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "V{:04} {:08X} - {:08X} {:>10} A{:04}",
+            self.id,
+            self.base,
+            self.end(),
+            ByteSize(self.size),
+            self.allocation
+        )
+    }
+}
+
+#[derive(Clone, Debug)]
+struct HeapRegions {
+    map: IdHashMap<HeapRegion>,
+    in_order: Vec<HeapRegionId>,
+}
+
+#[derive(PartialEq, Eq, Copy, Clone, Debug)]
+struct HeapRegion {
+    id: HeapRegionId,
+    state: HeapRegionState,
+    base: usize,
+    length: usize,
+}
+
+#[derive(PartialEq, Eq, Copy, Clone, Debug)]
+enum HeapRegionState {
+    Free,
+    Used(AllocationId),
+}
+
+impl HeapRegions {
+    fn new(size: usize) -> HeapRegions {
+        let mut regions = HeapRegions {
+            map: IdHashMap::new(),
+            in_order: Vec::with_capacity(1),
+        };
+
+        let id = regions.map.insert(HeapRegion {
+            id: 0,
+            state: HeapRegionState::Free,
+            base: 0,
+            length: size,
+        });
+
+        regions.in_order.push(id);
+
+        regions
+    }
+
+    fn allocate(
+        &mut self,
+        data_size: usize,
+        allocation: AllocationId,
+    ) -> Result<(usize, HeapRegionId)> {
+        let total_size = data_size as usize + bitfield_len(data_size as usize);
+
+        let (index, region) = self
+            .in_order
+            .iter()
+            .map(|id| {
+                self.map
+                    .get(*id)
+                    .expect("In-order vector pointed to non-existent region")
+            })
+            .enumerate()
+            .filter(|(_, x)| x.state.is_free())
+            .find(|(_, x)| x.length >= total_size)
+            .ok_or_else(|| Error::new("Out of memory"))?;
+
+        let region_id = region.id;
+
+        if region.length > total_size {
+            let new_region_id = self.map.insert(HeapRegion {
+                id: 0,
+                state: HeapRegionState::Free,
+                base: region.base + total_size,
+                length: region.length - total_size,
+            });
+            self.in_order.insert(index + 1, new_region_id);
+        }
+
+        let region = self.map.get_mut(region_id).unwrap();
+        region.length = total_size;
+        region.state = HeapRegionState::Used(allocation);
+
+        Ok((region.base, region.id))
+    }
+}
+
+impl Display for HeapRegions {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let mut sorted_regions: Vec<&HeapRegion> = self.map.iter().collect();
+        sorted_regions.sort_unstable_by_key(|x| x.base);
+
+        write!(f, "Heap Regions")?;
+        for region in sorted_regions {
+            write!(f, "\n  {}", region)?;
+        }
+
+        Ok(())
+    }
+}
+
+impl Display for HeapRegion {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "R{:04} {:08X} {:>10} {}",
+            self.id,
+            self.base,
+            ByteSize(self.length as u64),
+            self.state
+        )
+    }
+}
+
+impl Display for HeapRegionState {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            HeapRegionState::Free => write!(f, "Free"),
+            HeapRegionState::Used(id) => write!(f, "A{:04}", *id),
+        }
+    }
+}
+
+trait IdStruct {
+    fn get_id(&self) -> u64;
+    fn set_id(&mut self, id: u64);
+}
+
+impl IdStruct for Allocation {
+    fn get_id(&self) -> u64 {
+        self.id
+    }
+    fn set_id(&mut self, id: u64) {
+        self.id = id
+    }
+}
+
+impl IdStruct for VirtualAddressBlock {
+    fn get_id(&self) -> u64 {
+        self.id
+    }
+    fn set_id(&mut self, id: u64) {
+        self.id = id
+    }
+}
+
+impl IdStruct for HeapRegion {
+    fn get_id(&self) -> u64 {
+        self.id
+    }
+    fn set_id(&mut self, id: u64) {
+        self.id = id
+    }
+}
+
+#[derive(Clone, Debug)]
+struct IdHashMap<T>
+where
+    T: IdStruct,
+{
+    next_id: u64,
+    map: HashMap<u64, T>,
+}
+
+impl<T> IdHashMap<T>
+where
+    T: IdStruct,
+{
+    fn new() -> IdHashMap<T> {
+        IdHashMap {
+            next_id: 1,
+            map: HashMap::new(),
+        }
+    }
+
+    fn peek_next_id(&self) -> u64 {
+        self.next_id
+    }
+
+    fn insert(&mut self, mut item: T) -> u64 {
+        let id = self.next_id;
+        self.next_id += 1;
+
+        item.set_id(id);
+        self.map.insert(id, item);
+
+        id
+    }
+
+    fn get(&self, id: u64) -> Option<&T> {
+        self.map.get(&id)
+    }
+
+    fn get_mut(&mut self, id: u64) -> Option<&mut T> {
+        self.map.get_mut(&id)
+    }
+
+    fn remove(&mut self, id: u64) {
+        self.map.remove(&id);
+    }
+
+    fn iter(&self) -> std::collections::hash_map::Values<u64, T> {
+        self.map.values()
+    }
+}
+
+impl<'a, T> IntoIterator for &'a IdHashMap<T>
+where
+    T: IdStruct,
+{
+    type Item = &'a T;
+    type IntoIter = std::collections::hash_map::Values<'a, u64, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+fn bitfield_len(data_len: usize) -> usize {
+    data_len / WORD_BYTE_SIZE as usize / std::mem::size_of::<u8>()
 }
 
 fn round_down_to<T>(value: T, alignment: T) -> T

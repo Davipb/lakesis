@@ -13,6 +13,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "bytesize"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "81a18687293a1546b67c246452202bbbf143d239cb43494cc163da14979082da"
+
+[[package]]
 name = "cfg-if"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -40,6 +46,7 @@ name = "lakesis"
 version = "0.1.0"
 dependencies = [
  "bitvec",
+ "bytesize",
  "rand",
 ]
 

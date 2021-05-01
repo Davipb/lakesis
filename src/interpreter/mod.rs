@@ -362,7 +362,7 @@ impl Interpreter {
                 let size = self.read(&opcode.operands[0])?.value;
 
                 let addr = DataWord {
-                    value: self.memory.allocate(size, None, true)?,
+                    value: self.memory.allocate(size, None, true, None)?,
                     is_reference: true,
                 };
                 self.write(&opcode.operands[1], addr)?;
@@ -401,13 +401,13 @@ impl Interpreter {
                 println!("DEBUGCPU | {} | {}", num, self);
             }
 
-            Instruction::DebugMemory => {
+            Instruction::DebugDump => {
                 self.ensure_operands(&opcode, 2)?;
                 let addr = self.read(&opcode.operands[0])?.value;
                 let len = self.read(&opcode.operands[1])?.value;
                 let data = self.memory.get(addr, len)?;
 
-                print!("DEBUGMEM | 0x{:X} | ", addr);
+                print!("DEBUGDUMP | 0x{:X} | ", addr);
 
                 let mut i = 0;
                 for byte in data {
@@ -420,6 +420,11 @@ impl Interpreter {
                 }
 
                 println!()
+            }
+
+            Instruction::DebugMemory => {
+                self.ensure_operands(&opcode, 0)?;
+                println!("{}", self.memory);
             }
 
             Instruction::Halt => return Ok(false),
@@ -714,13 +719,19 @@ pub fn run(reader: &mut impl Read) -> VoidResult {
         aligned_len += 1;
     }
 
-    if interpreter.memory.allocate(aligned_len, Some(0), false)? != 0 {
+    if interpreter
+        .memory
+        .allocate(aligned_len, Some(0), false, Some("Program"))?
+        != 0
+    {
         return Err(Error::new("Unable to allocate program data at address 0"));
     }
 
     interpreter.memory.set(0, &program_data)?;
 
-    let stack_base = interpreter.memory.allocate(STACK_SIZE, None, false)?;
+    let stack_base = interpreter
+        .memory
+        .allocate(STACK_SIZE, None, false, Some("Stack"))?;
     interpreter.cpu_state.stack_pointer =
         Wrapping(stack_base) + Wrapping(STACK_SIZE) - Wrapping(WORD_BYTE_SIZE);
 

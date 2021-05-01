@@ -137,7 +137,7 @@ LinkedList::print:
     LinkedList::print::loop:
     cmp r0, 0
     jeq LinkedList::print::end
-    ; debugmem r0, 3w
+    ; debugdump r0, 3w
 
     mov LinkedList::print::str_node, r1
     ref r1
@@ -179,7 +179,7 @@ main:
     pop r3
 
     push 1_000
-    native 2
+    ;native 2
     pop r0
 
     native 1

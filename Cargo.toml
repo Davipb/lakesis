@@ -9,3 +9,4 @@ edition = "2018"
 [dependencies]
 bitvec = "0.22.1"
 rand = "0.8.3"
+bytesize = "1.0.1"

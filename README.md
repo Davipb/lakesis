@@ -92,7 +92,10 @@ Does nothing
 * NATIVE num  
 `1C num`  
 Calls the native function identified by `num`. For a list of available native functions, check the section below.
-* DEBUGMEM addr len  
+* DEBUGMEM
+`3D`  
+Dumps the current state of memory to the console for debugging purposes
+* DEBUGDUMP addr len  
 `3D addr len`  
 Dumps `len` bytes of memory starting at `addr` to the console for debugging purposes
 * DEBUGCPU num  
