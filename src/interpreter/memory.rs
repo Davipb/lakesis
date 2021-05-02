@@ -1,8 +1,11 @@
 use super::DataWord;
-use crate::core::{Error, Result, UWord, VoidResult, MAX_MEMORY_SIZE, WORD_BYTE_SIZE};
+use crate::core::{
+    Error, Result, UWord, VoidResult, INITIAL_MEMORY_SIZE, MAX_MEMORY_SIZE, WORD_BYTE_SIZE,
+};
 use bitvec::prelude::*;
 use bitvec::ptr::{Const, Mut};
 use bytesize::ByteSize;
+use std::cmp::min;
 use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
 use std::fmt::{self, Display, Formatter};
@@ -25,8 +28,8 @@ impl Memory {
         Memory {
             virtual_mapper: VirtualAddressMapper::new(),
             allocations: IdHashMap::new(),
-            regions: HeapRegions::new(MAX_MEMORY_SIZE),
-            heap: vec![0; MAX_MEMORY_SIZE],
+            regions: HeapRegions::new(INITIAL_MEMORY_SIZE),
+            heap: vec![0; INITIAL_MEMORY_SIZE],
         }
     }
 
@@ -192,24 +195,71 @@ impl Memory {
             HeapRegionAllocationResult::OutOfMemory => {}
         };
 
+        // Not enough space left, try to free up memory by running the GC
         self.force_garbage_collection(gc_roots)?;
+
+        match self.regions.allocate(data_size as usize, allocation_id) {
+            HeapRegionAllocationResult::Success { base, id } => return Ok((base, id)),
+            HeapRegionAllocationResult::Error(e) => return Err(e),
+            HeapRegionAllocationResult::OutOfMemory => {}
+        };
+
+        // Still not enough space left, try to expand the heap
+
+        let minimum_required = self.regions.used_bytes() + total_region_len(data_size as usize);
+        if minimum_required > MAX_MEMORY_SIZE {
+            self.report_out_of_memory(data_size);
+            return Err(Error::new("Out of memory"));
+        }
+
+        let mut new_heap_size = self.heap.len();
+        while new_heap_size < minimum_required {
+            new_heap_size = min(new_heap_size * 2, MAX_MEMORY_SIZE);
+        }
+
+        println!(
+            "LAKESIS | GC: Expanding heap to {} ({} bytes)",
+            human_readable_byte_size(new_heap_size as u64),
+            new_heap_size
+        );
+
+        let start = std::time::Instant::now();
+
+        self.heap.resize(new_heap_size, 0);
+
+        let mid = std::time::Instant::now();
+
+        self.regions.extend(new_heap_size);
+
+        let end = std::time::Instant::now();
+
+        println!(
+            "LAKESIS | GC: Done expanding heap. Total {} ms / Alloc {} ms / Regions {} ms",
+            end.duration_since(start).as_millis(),
+            mid.duration_since(start).as_millis(),
+            end.duration_since(mid).as_millis(),
+        );
 
         match self.regions.allocate(data_size as usize, allocation_id) {
             HeapRegionAllocationResult::Success { base, id } => Ok((base, id)),
             HeapRegionAllocationResult::Error(e) => Err(e),
             HeapRegionAllocationResult::OutOfMemory => {
-                let total_size = data_size + bitfield_len(data_size as usize) as UWord;
-                println!(
-                    "LAKESIS | Out of memory - Requested: Data {} ({} bytes) / Total {} ({} bytes)",
-                    human_readable_byte_size(data_size),
-                    data_size,
-                    human_readable_byte_size(total_size),
-                    total_size
-                );
-                println!("{}", self);
+                self.report_out_of_memory(data_size);
                 Err(Error::new("Out of memory"))
             }
         }
+    }
+
+    fn report_out_of_memory(&self, data_size: UWord) {
+        let total_size = total_region_len(data_size as usize) as UWord;
+        println!(
+            "LAKESIS | Out of memory - Requested: Data {} ({} bytes) / Total {} ({} bytes)",
+            human_readable_byte_size(data_size),
+            data_size,
+            human_readable_byte_size(total_size),
+            total_size
+        );
+        println!("{}", self);
     }
 
     fn deallocate(&mut self, id: AllocationId) -> VoidResult {
@@ -619,12 +669,20 @@ impl HeapRegions {
         self.map.get(id)
     }
 
+    fn used_bytes(&self) -> usize {
+        self.map
+            .iter()
+            .filter(|x| x.is_used())
+            .map(|x| x.length)
+            .sum()
+    }
+
     fn allocate(
         &mut self,
         data_size: usize,
         allocation: AllocationId,
     ) -> HeapRegionAllocationResult {
-        let total_size = data_size as usize + bitfield_len(data_size as usize);
+        let total_size = total_region_len(data_size as usize);
 
         let (index, region) = match self
             .in_order
@@ -772,6 +830,26 @@ impl HeapRegions {
             });
             self.in_order.push(new_region_id);
         }
+    }
+
+    fn extend(&mut self, new_size: usize) {
+        let last_region_id = *self.in_order.last().unwrap();
+        let last_region = self.map.get(last_region_id).unwrap();
+
+        if last_region.is_free() {
+            let last_region = self.map.get_mut(last_region_id).unwrap();
+            last_region.length = new_size - last_region.base;
+            return;
+        }
+
+        let new_region = HeapRegion {
+            id: Default::default(),
+            state: HeapRegionState::Free,
+            base: last_region.end(),
+            length: new_size - last_region.end(),
+        };
+        let new_region_id = self.map.insert(new_region);
+        self.in_order.push(new_region_id);
     }
 
     fn join_free_right(&mut self, left_index: usize) -> VoidResult {
@@ -1031,6 +1109,10 @@ where
 
 fn bitfield_len(data_len: usize) -> usize {
     divide_round_up(data_len, WORD_BYTE_SIZE as usize * 8)
+}
+
+fn total_region_len(data_len: usize) -> usize {
+    data_len + bitfield_len(data_len)
 }
 
 fn round_down_to<T>(value: T, alignment: T) -> T
