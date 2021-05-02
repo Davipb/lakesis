@@ -5,22 +5,26 @@ use crate::core::{
 use bitvec::prelude::*;
 use bitvec::ptr::{Const, Mut};
 use bytesize::ByteSize;
+use std::alloc;
+use std::alloc::Layout;
 use std::cmp::min;
 use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
 use std::fmt::{self, Display, Formatter};
 use std::hash::Hash;
 use std::io::{self, Read};
-use std::ops::{Add, Deref, DerefMut, Div, Mul, Range, Sub};
+use std::ops::{Add, Deref, DerefMut, Div, Index, IndexMut, Mul, Range, Sub};
+use std::ptr;
+use std::slice;
 
 const VIRTUAL_PAGE_SIZE: UWord = 1024;
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct Memory {
     virtual_mapper: VirtualAddressMapper,
     regions: HeapRegions,
     allocations: IdHashMap<Allocation>,
-    heap: Vec<u8>,
+    heap: Heap,
 }
 
 impl Memory {
@@ -29,7 +33,7 @@ impl Memory {
             virtual_mapper: VirtualAddressMapper::new(),
             allocations: IdHashMap::new(),
             regions: HeapRegions::new(INITIAL_MEMORY_SIZE),
-            heap: vec![0; INITIAL_MEMORY_SIZE],
+            heap: Heap::new(INITIAL_MEMORY_SIZE),
         }
     }
 
@@ -217,28 +221,16 @@ impl Memory {
             new_heap_size = min(new_heap_size * 2, MAX_MEMORY_SIZE);
         }
 
-        println!(
-            "LAKESIS | GC: Expanding heap to {} ({} bytes)",
-            human_readable_byte_size(new_heap_size as u64),
-            new_heap_size
-        );
+        // println!(
+        //     "LAKESIS | GC: Expanding heap to {} ({} bytes)",
+        //     human_readable_byte_size(new_heap_size as u64),
+        //     new_heap_size
+        // );
 
-        let start = std::time::Instant::now();
-
-        self.heap.resize(new_heap_size, 0);
-
-        let mid = std::time::Instant::now();
-
+        self.heap.resize(new_heap_size);
         self.regions.extend(new_heap_size);
 
-        let end = std::time::Instant::now();
-
-        println!(
-            "LAKESIS | GC: Done expanding heap. Total {} ms / Alloc {} ms / Regions {} ms",
-            end.duration_since(start).as_millis(),
-            mid.duration_since(start).as_millis(),
-            end.duration_since(mid).as_millis(),
-        );
+        // println!("LAKESIS | GC: Done expanding heap");
 
         match self.regions.allocate(data_size as usize, allocation_id) {
             HeapRegionAllocationResult::Success { base, id } => Ok((base, id)),
@@ -836,6 +828,8 @@ impl HeapRegions {
         let last_region_id = *self.in_order.last().unwrap();
         let last_region = self.map.get(last_region_id).unwrap();
 
+        assert!(new_size >= last_region.end());
+
         if last_region.is_free() {
             let last_region = self.map.get_mut(last_region_id).unwrap();
             last_region.length = new_size - last_region.base;
@@ -959,6 +953,73 @@ impl Display for HeapRegionState {
             HeapRegionState::Free => write!(f, "Free"),
             HeapRegionState::Used(id) => write!(f, "{}", *id),
         }
+    }
+}
+
+#[derive(Debug)]
+struct Heap {
+    ptr: *mut u8,
+    len: usize,
+}
+
+impl Heap {
+    fn new(size: usize) -> Heap {
+        let mut heap = Heap {
+            ptr: unsafe { ptr::null_mut() },
+            len: size,
+        };
+
+        heap.ptr = unsafe { alloc::alloc(heap.layout()) };
+
+        heap
+    }
+
+    fn layout(&self) -> Layout {
+        Layout::array::<u8>(self.len).unwrap()
+    }
+
+    fn resize(&mut self, new_size: usize) {
+        self.ptr = unsafe { alloc::realloc(self.ptr, self.layout(), new_size) };
+        self.len = new_size;
+    }
+}
+
+impl Drop for Heap {
+    fn drop(&mut self) {
+        unsafe {
+            alloc::dealloc(self.ptr, self.layout());
+        };
+
+        self.ptr = ptr::null_mut();
+        self.len = 0;
+    }
+}
+
+impl Index<Range<usize>> for Heap {
+    type Output = [u8];
+
+    fn index(&self, index: Range<usize>) -> &Self::Output {
+        unsafe { slice::from_raw_parts(self.ptr.add(index.start), index.len()) }
+    }
+}
+
+impl IndexMut<Range<usize>> for Heap {
+    fn index_mut(&mut self, index: Range<usize>) -> &mut Self::Output {
+        unsafe { slice::from_raw_parts_mut(self.ptr.add(index.start), index.len()) }
+    }
+}
+
+impl Deref for Heap {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        unsafe { slice::from_raw_parts(self.ptr, self.len) }
+    }
+}
+
+impl DerefMut for Heap {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        unsafe { slice::from_raw_parts_mut(self.ptr, self.len) }
     }
 }
 
