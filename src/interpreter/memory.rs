@@ -8,7 +8,7 @@ use std::convert::TryInto;
 use std::fmt::{self, Display, Formatter};
 use std::hash::Hash;
 use std::io::{self, Read};
-use std::ops::{Add, Div, Mul, Sub};
+use std::ops::{Add, Deref, DerefMut, Div, Mul, Range, Sub};
 
 const VIRTUAL_PAGE_SIZE: UWord = 1024;
 
@@ -165,8 +165,16 @@ impl Memory {
         }
 
         for id in collectible {
-            println!("LAKESIS | GC: Deallocating {}", id);
+            //println!("LAKESIS | GC: Deallocating {}", id);
             self.deallocate(id)?;
+        }
+
+        //println!("LAKESIS | GC: Compacting memory");
+        self.regions.compact(&mut self.heap);
+
+        for allocation in self.allocations.iter_mut() {
+            let region = self.regions.get(allocation.region).unwrap();
+            allocation.start = region.base;
         }
 
         Ok(())
@@ -607,6 +615,10 @@ impl HeapRegions {
         regions
     }
 
+    fn get(&self, id: HeapRegionId) -> Option<&HeapRegion> {
+        self.map.get(id)
+    }
+
     fn allocate(
         &mut self,
         data_size: usize,
@@ -726,6 +738,42 @@ impl HeapRegions {
         Ok(())
     }
 
+    fn compact(&mut self, heap: &mut [u8]) {
+        let end = self.map.get(*self.in_order.last().unwrap()).unwrap().end();
+
+        let mut index = 0;
+        let mut next_base = 0;
+        while index < self.in_order.len() {
+            let region_id = self.in_order[index];
+            let region = self.map.get(region_id).unwrap();
+
+            if region.is_free() {
+                self.in_order.remove(index);
+                self.map.remove(region_id);
+                // Since this region was removed, the next region will have the same index
+                continue;
+            }
+
+            heap.copy_within(region.range(), next_base);
+
+            let region = self.map.get_mut(region_id).unwrap();
+            region.base = next_base;
+            next_base = region.end();
+
+            index += 1;
+        }
+
+        if next_base < end {
+            let new_region_id = self.map.insert(HeapRegion {
+                id: Default::default(),
+                state: HeapRegionState::Free,
+                base: next_base,
+                length: end - next_base,
+            });
+            self.in_order.push(new_region_id);
+        }
+    }
+
     fn join_free_right(&mut self, left_index: usize) -> VoidResult {
         assert!(left_index < self.in_order.len() - 1);
 
@@ -785,6 +833,14 @@ impl HeapRegion {
     fn is_used(&self) -> bool {
         self.state.is_used()
     }
+
+    fn end(&self) -> usize {
+        self.base + self.length
+    }
+
+    fn range(&self) -> Range<usize> {
+        self.base..self.end()
+    }
 }
 
 impl Display for HeapRegion {
@@ -828,17 +884,15 @@ impl Display for HeapRegionState {
     }
 }
 
-trait IdWrapper: Hash + Eq + Copy + Default {
-    const DISPLAY_PREFIX: &'static str;
+trait IdWrapper: Hash + Eq + Copy + Default + Deref<Target = u64> + DerefMut {
     fn new(x: u64) -> Self;
-    fn value(&self) -> u64;
 
     fn first() -> Self {
         Self::new(1)
     }
 
     fn next(&self) -> Self {
-        Self::new(self.value() + 1)
+        Self::new(**self + 1)
     }
 }
 
@@ -854,14 +908,8 @@ macro_rules! entity_id {
         struct $id_wrapper(u64);
 
         impl IdWrapper for $id_wrapper {
-            const DISPLAY_PREFIX: &'static str = $prefix;
-
             fn new(x: u64) -> Self {
                 Self(x)
-            }
-
-            fn value(&self) -> u64 {
-                self.0
             }
         }
 
@@ -878,7 +926,21 @@ macro_rules! entity_id {
 
         impl Display for $id_wrapper {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                write!(f, "{}{:04}", Self::DISPLAY_PREFIX, self.value())
+                write!(f, "{}{:04}", $prefix, **self)
+            }
+        }
+
+        impl Deref for $id_wrapper {
+            type Target = u64;
+
+            fn deref(&self) -> &Self::Target {
+                &self.0
+            }
+        }
+
+        impl DerefMut for $id_wrapper {
+            fn deref_mut(&mut self) -> &mut Self::Target {
+                &mut self.0
             }
         }
     };
@@ -936,6 +998,10 @@ where
 
     fn iter(&self) -> std::collections::hash_map::Values<T::Id, T> {
         self.map.values()
+    }
+
+    fn iter_mut(&mut self) -> std::collections::hash_map::ValuesMut<T::Id, T> {
+        self.map.values_mut()
     }
 
     fn id_iter(&self) -> std::collections::hash_map::Keys<T::Id, T> {

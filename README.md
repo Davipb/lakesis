@@ -14,7 +14,7 @@ Check out some examples of what the runtime can already do at the [/asm director
 - [x] Simple memory allocation (without GC)
 - [X] Virtual/physical address translation
 - [x] Simple mark/sweep garbage collection
-- [ ] Mark/sweep/compact garbage collection
+- [x] Mark/sweep/compact garbage collection
 
 ## Usage
 The documentation below uses `cargo run` to compile and execute the runtime directly from cargo,
