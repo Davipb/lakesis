@@ -1,7 +1,5 @@
 # Lakesis
-⚠ Work in Progress ⚠
-
-A programming language runtime following in the footsteps of the Java Virtual Machine with its own bytecode, 
+A bytecode VM following in the footsteps of the Java Virtual Machine with its own assembler, 
 dynamic memory allocation, and garbage collection.
 This is a personal learning experiment and creating a production-ready language is not its goal.
 
@@ -19,7 +17,7 @@ Check out some examples of what the runtime can already do at the [/asm director
 ## Usage
 The documentation below uses `cargo run` to compile and execute the runtime directly from cargo,
 but it works the same if you're using a compiled version 
-(just replace `cargon run` with the name of the executable)
+(just replace `cargo run` with the name of the executable)
 
 * `cargo run help`  
   Prints this usage help
@@ -40,11 +38,6 @@ but it works the same if you're using a compiled version
 * `cargo run runasm <file>`  
   Compiles an assembly source file and immediately runs it
   * `file`: Path of the assembly source code to compile and run
-
-
-## Work in progress warning
-As Lakesis is a work in progress, the sections below may not reflect the current state of the project.
-Consider them a living architectural document rather than documentation.
 
 ## Architecture
 * Byte-addressable with 64-bit (8 byte) words
